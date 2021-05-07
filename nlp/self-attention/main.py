@@ -3,24 +3,25 @@
 from transformer import Transformer
 from torchtext.data import get_tokenizer
 from typing import List, Tuple, Generator
+import io
 
 import torch
 import torch.nn as nn
 
-
-datas = open('../../datasets/cmn-eng/cmn.txt')
-dataset: List[Tuple[str, str]] = list(
-        map(
-            lambda pair: (pair[0], pair[1]),
-            filter(
-                lambda pair: len(pair) == 2,
-                map(
-                    lambda data: data.split('\t')[0:2],
-                    datas.read().split('\n')
+dataset: List[Tuple[str, str]]
+with io.open('../../datasets/cmn-eng/cmn.txt', mode="r", encoding="utf-8") as datafile:
+    dataset: List[Tuple[str, str]] = list(
+            map(
+                lambda pair: (pair[0], pair[1]),
+                filter(
+                    lambda pair: len(pair) == 2,
+                    map(
+                        lambda data: data.split('\t')[0:2],
+                        datafile.read().split('\n')
+                    )
                 )
             )
         )
-    )
 
 en_tokenizer = get_tokenizer('basic_english', language = 'en')
 en_word_to_idx = {}
@@ -137,6 +138,7 @@ def embededDataset() -> Generator[List[Tuple[torch.Tensor, torch.Tensor, torch.T
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = "cpu"
 def train(model: nn.Module, loss_fn, optimizer):
     i = 0
     for epcho in range(0, 100):
@@ -160,7 +162,7 @@ def train(model: nn.Module, loss_fn, optimizer):
                     print(f"device: {device}, epcho: {epcho}, batch: {j}, loss: {loss:>7f}")
 
 def load_model():
-    model = Transformer()
+    model = Transformer().to(device)
     model.load_state_dict(torch.load("model.pth"))
     return model
 
@@ -168,7 +170,7 @@ def save_model(model: nn.Module):
     torch.save(model.state_dict(), "model.pth")
 
 if __name__ == '__main__':
-    model = Transformer(heads = 8, embedding_size = 64, expansion = 4, dropout = 0.2, layers = 6)
+    model = Transformer(heads = 8, embedding_size = 64, expansion = 4, dropout = 0.2, layers = 6, device = device)
     loss_fn = nn.L1Loss()
     optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
     train(model, loss_fn, optimizer)

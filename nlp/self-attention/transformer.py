@@ -3,17 +3,17 @@ import torch.nn as nn
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, heads: int, embedding_size: int):
+    def __init__(self, heads: int, embedding_size: int, device: str):
         super(MultiHeadAttention, self).__init__()
         self.heads = heads
         self.embedding_size = embedding_size
         self.head_size = self.embedding_size // self.heads
         assert embedding_size % heads == 0
 
-        self.queryTrans = nn.Linear(self.embedding_size, self.embedding_size)
-        self.keyTrans   = nn.Linear(self.embedding_size, self.embedding_size)
-        self.valueTrans = nn.Linear(self.embedding_size, self.embedding_size)
-        self.linearOut       = nn.Linear(self.embedding_size, self.embedding_size)
+        self.queryTrans = nn.Linear(self.embedding_size, self.embedding_size).to(device)
+        self.keyTrans   = nn.Linear(self.embedding_size, self.embedding_size).to(device)
+        self.valueTrans = nn.Linear(self.embedding_size, self.embedding_size).to(device)
+        self.linearOut  = nn.Linear(self.embedding_size, self.embedding_size).to(device)
 
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
@@ -26,8 +26,8 @@ class MultiHeadAttention(nn.Module):
 
         # Linear Transformation
         query = self.queryTrans(query)
-        key   = self.queryTrans(key)
-        value = self.queryTrans(value)
+        key   = self.keyTrans(key)
+        value = self.valueTrans(value)
 
         # Reshape to multi heads
         query = query.reshape(batch_size, query_len, self.heads, self.head_size)
@@ -45,19 +45,20 @@ class MultiHeadAttention(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float):
+    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, device: str):
         super(EncoderBlock, self).__init__()
         self.heads = heads
         self.embedding_size = embedding_size
 
-        self.dropout = nn.Dropout(dropout)
-        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size)
-        self.norm1 = nn.LayerNorm(self.embedding_size)
+        self.dropout = nn.Dropout(dropout).to(device)
+        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size, device)
+        self.norm1 = nn.LayerNorm(self.embedding_size).to(device)
         self.fcff = nn.Sequential(
-                nn.Linear(self.embedding_size, expansion * self.embedding_size),
-                nn.ReLU(),
-                nn.Linear(expansion * self.embedding_size, self.embedding_size))
-        self.norm2 = nn.LayerNorm(self.embedding_size)
+                nn.Linear(self.embedding_size, expansion * self.embedding_size).to(device),
+                nn.ReLU().to(device),
+                nn.Linear(expansion * self.embedding_size, self.embedding_size).to(device)
+                ).to(device)
+        self.norm2 = nn.LayerNorm(self.embedding_size).to(device)
 
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
@@ -70,23 +71,23 @@ class EncoderBlock(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float):
+    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, device: str):
         super(DecoderBlock, self).__init__()
         self.heads = heads
         self.embedding_size = embedding_size
 
-        self.dropout = nn.Dropout(dropout)
-        self.norm1 = nn.LayerNorm(self.embedding_size)
-        self.norm2 = nn.LayerNorm(self.embedding_size)
-        self.norm3 = nn.LayerNorm(self.embedding_size)
-        self.attention = MultiHeadAttention(self.heads, self.embedding_size)
+        self.dropout = nn.Dropout(dropout).to(device)
+        self.norm1 = nn.LayerNorm(self.embedding_size).to(device)
+        self.norm2 = nn.LayerNorm(self.embedding_size).to(device)
+        self.norm3 = nn.LayerNorm(self.embedding_size).to(device)
+        self.attention = MultiHeadAttention(self.heads, self.embedding_size, device)
         # TODO mask ??
-        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size)
+        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size, device)
         self.fcff = nn.Sequential(
-                nn.Linear(self.embedding_size, expansion * self.embedding_size),
-                nn.ReLU(),
-                nn.Linear(expansion * self.embedding_size, self.embedding_size),
-                )
+                nn.Linear(self.embedding_size, expansion * self.embedding_size).to(device),
+                nn.ReLU().to(device),
+                nn.Linear(expansion * self.embedding_size, self.embedding_size).to(device),
+                ).to(device)
 
     def forward(self, target: torch.Tensor, encSrc: torch.Tensor) -> torch.Tensor:
         # TODO mask
@@ -102,14 +103,15 @@ class DecoderBlock(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int):
+    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int, device: str):
         super(Decoder, self).__init__()
         self.layers = [
                 DecoderBlock(
                     heads, 
                     embedding_size, 
                     expansion, 
-                    dropout) for _ in range(0,layers)
+                    dropout,
+                    device) for _ in range(0,layers)
                 ]
 
     def forward(self, target: torch.Tensor, encSrc: torch.Tensor) -> torch.Tensor:
@@ -119,14 +121,15 @@ class Decoder(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int):
+    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int, device: str):
         super(Encoder, self).__init__()
         self.layers = [
                 EncoderBlock(
                     heads, 
                     embedding_size, 
                     expansion, 
-                    dropout) for _ in range(0,layers)
+                    dropout,
+                    device) for _ in range(0,layers)
                 ]
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
@@ -141,12 +144,13 @@ class Transformer(nn.Module):
             embedding_size: int = 64, 
             expansion: int = 4, 
             dropout: float = 0.2, 
-            layers: int = 6
+            layers: int = 6,
+            device: str = 'cpu'
             ):
         super(Transformer, self).__init__()
-        self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers)
-        self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers)
-        self.linearOut = nn.Linear(embedding_size, embedding_size)
+        self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers, device)
+        self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
+        self.linearOut = nn.Linear(embedding_size, embedding_size).to(device)
 
     def forward(self, src: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         srcEnc = self.encoder(src)
