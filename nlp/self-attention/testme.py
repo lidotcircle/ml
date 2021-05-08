@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 import math
 
 
@@ -16,28 +17,34 @@ class Toy(nn.Module):
         return self.layer(x)
 
 
-def sumSin(input: torch.Tensor) -> torch.Tensor:
+def functionToLearn(input: torch.Tensor) -> torch.Tensor:
     sum = torch.einsum("i->", [input])
     return torch.tensor([sum])
     # return torch.tensor([math.sin(sum)])
 
 TEST_INPUT_SIZE = 1024
-TEST_DATA_NO = 30000
-TEST_BATCH_SIZE = 2048
+TEST_DATA_NO = 10000
+TEST_BATCH_SIZE = 4096
 TEST_EPCHO = 1000
-LEARNING_RATE = 0.01
-dataset = list(map(lambda x: (x, sumSin(x)), [ torch.randn(TEST_INPUT_SIZE) for i in range(TEST_DATA_NO) ]))
+LEARNING_RATE = 0.003
 
-def makeBatch():
-    start = 0
-    end = len(dataset)
-    while start < end:
-        l = min(end - start, TEST_BATCH_SIZE)
-        n = dataset[start:start + l]
-        start = start + l
-        ti = torch.stack(list(map(lambda xy: xy[0], n)), dim = 0)
-        to = torch.stack(list(map(lambda xy: xy[1], n)), dim = 0)
-        yield ti, to
+class ToyDataset(Dataset):
+    def __init__(self, input_size: int, dataset_size: int, device: str):
+        super(ToyDataset).__init__()
+        self.device = device
+        self.dataset = list(
+            map(
+                lambda x: (x, functionToLearn(x).to(device)), 
+                [ torch.randn(input_size).to(device) for i in range(dataset_size) ]
+            )
+        )
+
+    def __getitem__(self, index):
+        return self.dataset[index]
+
+    def __len__(self):
+        return len(self.dataset)
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
@@ -46,12 +53,10 @@ if __name__ == '__main__':
     loss_fn = nn.L1Loss()
 
     i = 0
+    dataset = DataLoader(dataset = ToyDataset(TEST_INPUT_SIZE, TEST_DATA_NO, device), shuffle = True, batch_size = TEST_BATCH_SIZE)
     for epcho in range(TEST_EPCHO):
-        for x, y in makeBatch():
+        for x, y in dataset:
             i = i + 1
-            x = x.to(device)
-            y = y.to(device)
-
             pred = model(x)
             loss = loss_fn(pred, y)
 
@@ -64,6 +69,6 @@ if __name__ == '__main__':
     
     for test in range(10):
         x = torch.randn(TEST_INPUT_SIZE).to(device)
-        y = sumSin(x).to(device)
+        y = functionToLearn(x).to(device)
         pred = model(x)
         print(f"y: {y}, pred: {pred}")
