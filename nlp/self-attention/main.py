@@ -56,7 +56,7 @@ cn_embed = nn.Embedding(len(cn_idx_to_word) + 1, 63)
 # en_pos_embed = nn.Embedding(en_sentence_max_len, 1)
 # cn_pos_embed = nn.Embedding(cn_sentence_max_len, 1)
 
-BATCH_SIZE = 20
+BATCH_SIZE = 5096
 LEARNING_RATE = 0.002
 
 def embed_a_case(case: Tuple[str, str]) -> Tuple[List, List[Tuple[List, List]]]:
