@@ -150,7 +150,7 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers, device)
         self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
-        self.linearOut = nn.Linear(embedding_size, embedding_size).to(device)
+        self.linearOut = nn.Linear(embedding_size, 1).to(device)
 
     def forward(self, src: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         srcEnc = self.encoder(src)
