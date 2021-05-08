@@ -2,15 +2,30 @@
 
 from transformer import Transformer
 from torchtext.data import get_tokenizer
-from typing import List, Tuple, Generator
+from typing import List, Tuple, Generator, Iterator
 import io
 
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 
-dataset: List[Tuple[str, str]]
-with io.open('../../datasets/cmn-eng/cmn.txt', mode="r", encoding="utf-8") as datafile:
-    dataset: List[Tuple[str, str]] = list(
+
+class CnEnDataset(Dataset):
+    def __init__(self, file: str, embedding_size: int, device: str, max_sample: int = -1):
+        self.file = file
+        self.device = device
+        self.dataset: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
+        self.en_tokenizer = get_tokenizer('basic_english', language = 'en')
+        self.en_word_to_idx = {}
+        self.en_idx_to_word = [ '' ]
+        self.cn_word_to_idx = {}
+        self.cn_idx_to_word = [ '' ]
+        self.__bos_symbol = "<BOS>"
+        self.__eos_symbol = "<EOS>"
+        self.embedding_size = embedding_size
+        assert self.embedding_size > 1
+        with io.open(file, mode="r", encoding="utf-8") as datafile:
+            self.pair_dataset : List[Tuple[str, str]] = list(
             map(
                 lambda pair: (pair[0], pair[1]),
                 filter(
@@ -21,157 +36,135 @@ with io.open('../../datasets/cmn-eng/cmn.txt', mode="r", encoding="utf-8") as da
                     )
                 )
             )
-        )
+        )[0:max_sample]
+        for pair in self.pair_dataset:
+            for en_word in self.en_tokenizer(pair[0]):
+                self.__en_append_word(en_word)
+            for cn_word in pair[1]:
+                self.__cn_append_word(cn_word)
+        self.__cn_append_word(self.__bos_symbol)
+        self.__cn_append_word(self.__eos_symbol)
+        self.__en_append_word(self.__bos_symbol)
+        self.__en_append_word(self.__eos_symbol)
+        self.en_embed = nn.Embedding(len(self.en_idx_to_word) + 1, self.embedding_size - 1)
+        self.cn_embed = nn.Embedding(len(self.cn_idx_to_word) + 1, self.embedding_size - 1)
+        self.__init_dataset()
 
-en_tokenizer = get_tokenizer('basic_english', language = 'en')
-en_word_to_idx = {}
-en_idx_to_word = [ '' ]
-cn_word_to_idx = {}
-cn_idx_to_word = [ '' ]
-en_sentence_max_len = 1
-cn_sentence_max_len = 1
-for pair in dataset:
-    en_sentence_max_len = max(en_sentence_max_len, len(pair[0]))
-    cn_sentence_max_len = max(cn_sentence_max_len, len(pair[1]))
-    for voc in en_tokenizer(pair[0]):
-        if not voc in en_word_to_idx:
-            en_idx_to_word.append(voc)
-            en_word_to_idx[voc] = len(en_idx_to_word)
-    for v in pair[1]:
-        if not v in cn_word_to_idx:
-            cn_idx_to_word.append(v)
-            cn_word_to_idx[v] = len(cn_idx_to_word)
+    def __en_append_word(self, en_word: str):
+        if not en_word in self.en_word_to_idx:
+            self.en_idx_to_word.append(en_word)
+            self.en_word_to_idx[en_word] = len(self.en_idx_to_word)
 
-en_idx_to_word.append("<BOS>")
-cn_idx_to_word.append("<BOS>")
-en_word_to_idx['<BOS>'] = len(en_idx_to_word)
-cn_word_to_idx['<BOS>'] = len(cn_idx_to_word)
-en_idx_to_word.append("<EOS>")
-cn_idx_to_word.append("<EOS>")
-en_word_to_idx['<EOS>'] = len(en_idx_to_word)
-cn_word_to_idx['<EOS>'] = len(cn_idx_to_word)
+    def __cn_append_word(self, cn_word: str):
+        if not cn_word in self.cn_word_to_idx:
+            self.cn_idx_to_word.append(cn_word)
+            self.cn_word_to_idx[cn_word] = len(self.cn_idx_to_word)
 
-en_embed = nn.Embedding(len(en_idx_to_word) + 1, 63)
-cn_embed = nn.Embedding(len(cn_idx_to_word) + 1, 63)
-# en_pos_embed = nn.Embedding(en_sentence_max_len, 1)
-# cn_pos_embed = nn.Embedding(cn_sentence_max_len, 1)
+    def embed_a_case(self, src_sentence: str, trg_sentence: str) -> Tuple[List, List[Tuple[List, List]]]:
+        targets: List[Tuple[List, List]] = []
+        src_words: List[str] = self.en_tokenizer(src_sentence)
+        target_words: List[str] = list(map(lambda v: v, trg_sentence))
 
-BATCH_SIZE = 5096
-LEARNING_RATE = 0.002
+        src_embed = []
+        for i in range(len(src_words)):
+            val = src_words[i]
+            embed = self.en_embed(torch.tensor(self.en_word_to_idx[val]))
+            embed = torch.cat((embed, torch.tensor([i + 1])), 0)
+            src_embed.append(embed.tolist())
 
-def embed_a_case(case: Tuple[str, str]) -> Tuple[List, List[Tuple[List, List]]]:
-    targets: List[Tuple[List, List]] = []
-    src_words: List[str] = en_tokenizer(case[0])
-    target_words: List[str] = list(map(lambda v: v, case[1]))
-
-    src_embed = []
-    for i in range(len(src_words)):
-        val = src_words[i]
-        embed = en_embed(torch.tensor(en_word_to_idx[val]))
-        embed = torch.cat((embed, torch.tensor([i + 1])), 0)
-        src_embed.append(embed.tolist())
-
-    for i in range(len(target_words)):
-        v = [ torch.cat((cn_embed(torch.tensor(cn_word_to_idx["<BOS>"])), torch.tensor([ 0 ])), 0).tolist() ]
-        for j in range(i + 1):
-            embed = cn_embed(torch.tensor(cn_word_to_idx[target_words[i]]))
-            v.append(torch.cat((embed, torch.tensor([j + 1])), 0).tolist())
-        target = list(v)
-        output = list(v)
-        target.pop()
-        output.pop(0)
-        targets.append((target, output))
-        if len(v) == len(target_words) + 1:
+        for i in range(len(target_words)):
+            v = [ torch.cat((self.cn_embed(torch.tensor(self.cn_word_to_idx[self.__bos_symbol])), torch.tensor([ 0 ])), 0).tolist() ]
+            for j in range(i + 1):
+                embed = self.cn_embed(torch.tensor(self.cn_word_to_idx[target_words[i]]))
+                v.append(torch.cat((embed, torch.tensor([j + 1])), 0).tolist())
             target = list(v)
             output = list(v)
+            target.pop()
             output.pop(0)
-            t = torch.tensor(cn_word_to_idx["<EOS>"])
-            output.append(torch.cat((cn_embed(t), torch.tensor([ -1 ])), 0).tolist())
             targets.append((target, output))
+            if len(v) == len(target_words) + 1:
+                target = list(v)
+                output = list(v)
+                output.pop(0)
+                t = torch.tensor(self.cn_word_to_idx[self.__eos_symbol])
+                output.append(torch.cat((self.cn_embed(t), torch.tensor([ -1 ])), 0).tolist())
+                targets.append((target, output))
 
-    return src_embed, targets
+        return src_embed, targets
 
-def sort_cases_output(outputs: List[Tuple[List, List[Tuple[List, List]]]]) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    outputs.sort(key = lambda val: len(val[0]))
-    store = {}
-    for val in outputs:
-        src_val = val[0]
-        src_len = len(src_val)
-        if not src_len in store:
-            store[src_len] = {}
-        store2 = store[src_len]
-        for v2 in val[1]:
-            trg_len = len(v2[0])
-            assert len(v2[0]) == len(v2[1])
-            if not trg_len in store2:
-                store2[trg_len] = ([], [], [])
-            store3 = store2[trg_len]
-            store3[0].append(src_val)
-            store3[1].append(v2[0])
-            store3[2].append(v2[1])
+    def __append_a_case(self, x: List, trg_y: List[Tuple[List, List]]):
+        for trg, y in trg_y:
+            self.dataset.append((
+                torch.tensor(x).to(self.device),
+                torch.tensor(trg).to(self.device),
+                torch.tensor(y).to(self.device)
+                ))
 
-    ans = []
-    for k1 in store:
-        for k2 in store[k1]:
-            tp = store[k1][k2]
-            ans.append((
-                torch.tensor(tp[0]), 
-                torch.tensor(tp[1]), 
-                torch.tensor(tp[2])
-            ))
-    return ans
+    def __init_dataset(self):
+        for src, target in self.pair_dataset:
+            x, trg_y = self.embed_a_case(src, target)
+            self.__append_a_case(x, trg_y)
+        self.dataset.sort(key = lambda tp: len(tp[0]) * 2048 + len(tp[1]))
 
+    def __len__(self):
+        return len(self.dataset)
 
-def make_batch(thelist: List[int]) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    return sort_cases_output(list(
-        map(lambda idx: embed_a_case(dataset[idx]), thelist))
-    )
+    def __getitem__(self, index):
+        return self.dataset[index]
 
-
-def embededDataset() -> Generator[List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]], None, None]:
-    start = 0
-    end = len(dataset)
-    while start <= end:
-        thissize = min(end - start, BATCH_SIZE)
-        yield make_batch(list(range(start, start + thissize)))
-        start = start + thissize
+    def batchSampler(self, batch_size: int) -> Iterator[List[int]]:
+        start: int = 0
+        while start < len(self.dataset):
+            begin = start
+            ans = []
+            m = self.dataset[start][0].shape[0]
+            n = self.dataset[start][1].shape[0]
+            while start < len(self.dataset) \
+                and start < begin + batch_size \
+                and self.dataset[start][0].shape[0] == m \
+                and self.dataset[start][1].shape[0] == n:
+                ans.append(start)
+                start = start + 1
+            yield ans
 
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-# device = "cpu"
-def train(model: nn.Module, loss_fn, optimizer):
+BATCH_SIZE = 2048
+LEARNING_RATE = 0.002
+TRAIN_EPCHO = 1000
+EMBEDDING_SIZE = 512
+
+
+def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
+    print("begin training")
     i = 0
-    for epcho in range(0, 100):
+    for epcho in range(TRAIN_EPCHO):
         j = 0
-        for batch in embededDataset():
-            for src, target, y in batch:
-                src    = src.to(device)
-                target = target.to(device)
-                y      = y.to(device)
+        for x, tgr, y in dataloader:
+            pred = model(x, tgr)
+            loss = loss_fn(pred, y)
 
-                pred = model(src, target)
-                loss = loss_fn(pred, y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+            i = i + 1
+            j = j + 1
+            if i % 100 == 0:
+                print(f"device: {device}, epcho: {epcho}, batch: {j}, loss: {loss:>7f}")
 
-                i = i + 1
-                j = j + 1
-                if i % 100 == 0:
-                    print(f"device: {device}, epcho: {epcho}, batch: {j}, loss: {loss:>7f}")
-
-def load_model():
-    model = Transformer().to(device)
+def load_model(model: nn.Module):
     model.load_state_dict(torch.load("model.pth"))
     return model
 
 def save_model(model: nn.Module):
     torch.save(model.state_dict(), "model.pth")
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
-    model = Transformer(heads = 8, embedding_size = 64, expansion = 4, dropout = 0.2, layers = 6, device = device)
+    dataset = CnEnDataset("../../datasets/cmn-eng/cmn.txt", EMBEDDING_SIZE, device, 2000)
+    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(BATCH_SIZE))
+    dataloader_fake = list(dataloader.__iter__())
+    model = Transformer(heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4, dropout = 0.2, layers = 6, device = device)
     loss_fn = nn.L1Loss()
     optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
-    train(model, loss_fn, optimizer)
-
+    train(dataloader_fake, model, loss_fn, optimizer)

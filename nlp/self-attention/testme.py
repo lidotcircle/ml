@@ -10,7 +10,9 @@ class Toy(nn.Module):
         self.layer = nn.Sequential(
             nn.Linear(input, input * expansion).to(device),
             nn.ReLU().to(device),
-            nn.Linear(input* expansion, output).to(device)
+            nn.Linear(input * expansion, input * expansion).to(device),
+            nn.ReLU().to(device),
+            nn.Linear(input * expansion, output).to(device)
         ).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -19,14 +21,14 @@ class Toy(nn.Module):
 
 def functionToLearn(input: torch.Tensor) -> torch.Tensor:
     sum = torch.einsum("i->", [input])
-    return torch.tensor([sum])
-    # return torch.tensor([math.sin(sum)])
+    # return torch.tensor([sum])
+    return torch.tensor([math.sin(sum)])
 
 TEST_INPUT_SIZE = 1024
 TEST_DATA_NO = 10000
 TEST_BATCH_SIZE = 4096
-TEST_EPCHO = 1000
-LEARNING_RATE = 0.003
+TEST_EPCHO = 10000
+LEARNING_RATE = 0.0058
 
 class ToyDataset(Dataset):
     def __init__(self, input_size: int, dataset_size: int, device: str):
@@ -65,7 +67,7 @@ if __name__ == '__main__':
             optimizer.step()
 
             if i % 100 == 0:
-                print(f"device: {device}, epcho: {epcho}, batch: {i}, loss: {loss:>7f}")
+                print(f"device: {device}, epcho: {epcho}, batch_size: {dataset.batch_size}, batch: {i}, loss: {loss:>7f}")
     
     for test in range(10):
         x = torch.randn(TEST_INPUT_SIZE).to(device)
