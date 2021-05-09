@@ -60,7 +60,6 @@ class EncoderBlock(nn.Module):
                 ).to(device)
         self.norm2 = nn.LayerNorm(self.embedding_size).to(device)
 
-
     def forward(self, src: torch.Tensor) -> torch.Tensor:
         v = self.selfAttention(src, src, src)
         v = self.dropout(self.norm1(src + v))
@@ -105,14 +104,14 @@ class DecoderBlock(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int, device: str):
         super(Decoder, self).__init__()
-        self.layers = [
+        self.layers = nn.ModuleList([
                 DecoderBlock(
                     heads, 
                     embedding_size, 
                     expansion, 
                     dropout,
                     device) for _ in range(0,layers)
-                ]
+                ])
 
     def forward(self, target: torch.Tensor, encSrc: torch.Tensor) -> torch.Tensor:
         for layer in self.layers:
@@ -123,14 +122,14 @@ class Decoder(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int, device: str):
         super(Encoder, self).__init__()
-        self.layers = [
+        self.layers = nn.ModuleList([
                 EncoderBlock(
                     heads, 
                     embedding_size, 
                     expansion, 
                     dropout,
                     device) for _ in range(0,layers)
-                ]
+                ])
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
         for layer in self.layers:
