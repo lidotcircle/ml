@@ -19,6 +19,7 @@ class CnEnDataset(Dataset):
         self.device = device
         self.len_idx: List[int] = []
         self.mapstore = {}
+        self.index_me = None
         self.en_tokenizer = get_tokenizer('basic_english', language = 'en')
         self.en_word_to_idx = {}
         self.en_idx_to_word = [ ]
@@ -69,6 +70,7 @@ class CnEnDataset(Dataset):
         self.cn_embed = nn.Embedding(len(self.cn_idx_to_word) + 1, self.embedding_size - 1)
         self.batch_size = batch_size
         self.batchs = list(self.__batch_index_generate())
+        self.__warm_index()
 
     def cn_bos(self):
         return self.en_word_to_idx[self.__bos_symbol]
@@ -100,6 +102,20 @@ class CnEnDataset(Dataset):
         for i in range(len(targets)):
             self.embed_position(self.cn_embed, targets[i], i)
         return torch.stack(concat, dim = 0).to(self.device)
+
+    def __warm_index(self):
+        self.index_me: List[Tuple[List[int], List[int], List[int]]] = []
+        for en_s, cn_s in self.pair_dataset:
+            en_idx = list(map(lambda word: self.en_word_to_idx[word], self.en_tokenizer(en_s)))
+            cn_idx = [ self.cn_bos() ]
+            cn_words = list(cn_s)
+            cn_words.append(self.__eos_symbol)
+            for word in cn_words:
+                trg = list(cn_idx)
+                cn_idx.append(self.cn_word_to_idx[word])
+                y   = list(cn_idx)
+                y.pop(0)
+                self.index_me.append((en_idx, trg, y))
     
     def __get_with_idx_and_len(self, idx: int, xlen: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         en_sentence, cn_sentence = self.pair_dataset[idx]
@@ -174,11 +190,18 @@ class CnEnDataset(Dataset):
     def __len__(self):
         return self.len_idx[-1]
 
-    def __getitem__(self, index) -> torch.Tensor:
+    def __getitem__(self, index) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if index < 0:
             index = len(self) + index
-        l1, l2 = self.idx2pair_idx(index)
-        return self.__get_with_idx_and_len(l1, l2)
+        if self.index_me is not None:
+            x, trg, y = self.index_me[index]
+            x_tensor = self.__en_idx_to_tensor(x)
+            trg_tensor = self.__cn_trg_idx_to_tensor(trg)
+            y_tensor = self.__cn_y_idx_to_tensor(y)
+            return x_tensor, trg_tensor, y_tensor
+        else:
+            l1, l2 = self.idx2pair_idx(index)
+            return self.__get_with_idx_and_len(l1, l2)
 
     def __batch_index_generate(self) -> Iterator[List[int]]:
         for l1 in self.mapstore.keys():
@@ -207,10 +230,10 @@ class CnEnDataset(Dataset):
                 yield self.batchs[n]
 
 
-BATCH_SIZE = 200
-LEARNING_RATE = 0.1
+BATCH_SIZE = 300
+LEARNING_RATE = 0.01
 TRAIN_EPCHO = 1000
-EMBEDDING_SIZE = 128
+EMBEDDING_SIZE = 256
 
 
 def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
