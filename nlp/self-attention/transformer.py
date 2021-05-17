@@ -139,6 +139,8 @@ class Encoder(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self, 
+            sourceWordCount: int,
+            targetWordCount: int,
             heads: int = 8, 
             embedding_size: int = 64, 
             expansion: int = 4, 
@@ -147,12 +149,19 @@ class Transformer(nn.Module):
             device: str = 'cpu'
             ):
         super(Transformer, self).__init__()
+        assert targetWordCount > 0
+        self.srcEmbedMatrix = nn.Linear(sourceWordCount + 1, embedding_size).to(device)
+        self.dstEmbedMatrix = nn.Linear(targetWordCount + 1, embedding_size).to(device)
         self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers, device)
         self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
-        self.linearOut = nn.Linear(embedding_size, 1).to(device)
+        self.linearOut = nn.Linear(embedding_size, targetWordCount).to(device)
+        # self.softmax = nn.Softmax(dim = 2).to(device)
 
     def forward(self, src: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        src = self.srcEmbedMatrix(src)
+        target = self.dstEmbedMatrix(target)
         srcEnc = self.encoder(src)
         out = self.decoder(target, srcEnc)
+        # return self.softmax(self.linearOut(out))
         return self.linearOut(out)
 

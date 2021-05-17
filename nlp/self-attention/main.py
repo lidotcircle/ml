@@ -66,11 +66,15 @@ class CnEnDataset(Dataset):
                 if not v in storel1:
                     storel1[v] = []
                 storel1[v].append(i)
-        self.en_embed = nn.Embedding(len(self.en_idx_to_word) + 1, self.embedding_size - 1)
-        self.cn_embed = nn.Embedding(len(self.cn_idx_to_word) + 1, self.embedding_size - 1)
         self.batch_size = batch_size
         self.batchs = list(self.__batch_index_generate())
         self.__warm_index()
+
+    def targetWordCount(self):
+        return len(self.cn_idx_to_word)
+
+    def sourceWordCount(self):
+        return len(self.en_idx_to_word)
 
     def cn_bos(self):
         return self.en_word_to_idx[self.__bos_symbol]
@@ -88,21 +92,6 @@ class CnEnDataset(Dataset):
             self.cn_word_to_idx[cn_word] = len(self.cn_idx_to_word)
             self.cn_idx_to_word.append(cn_word)
 
-    def toword(self, value: float) -> Tuple[int, str]:
-        val = math.floor(value)
-        if value - val > 0.5:
-            val = val + 1
-        if val < 0 or val > len(self.cn_idx_to_word):
-            return val, "FAIL"
-        return val, self.cn_idx_to_word[val]
-
-    def getCnTarget(self, targets: List[float]) -> torch.Tensor:
-        targets.insert(0, self.cn_bos())
-        concat = []
-        for i in range(len(targets)):
-            self.embed_position(self.cn_embed, targets[i], i)
-        return torch.stack(concat, dim = 0).to(self.device)
-
     def __warm_index(self):
         self.index_me: List[Tuple[List[int], List[int], List[int]]] = []
         for en_s, cn_s in self.pair_dataset:
@@ -117,45 +106,40 @@ class CnEnDataset(Dataset):
                 y.pop(0)
                 self.index_me.append((en_idx, trg, y))
     
-    def __get_with_idx_and_len(self, idx: int, xlen: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        en_sentence, cn_sentence = self.pair_dataset[idx]
-        en_idx = map(lambda word: self.en_word_to_idx[word], self.en_tokenizer(en_sentence))
-        en_tensor = self.__en_idx_to_tensor(en_idx)
-
-        assert xlen >= 0 and xlen <= len(cn_sentence)
-        cn_idx = [ self.cn_bos() ]
-        for i in range(min(xlen + 1, len(cn_sentence))):
-            cn_idx.append(self.cn_word_to_idx[cn_sentence[i]])
-        trg_idx = list(cn_idx)
-        cn_idx.pop(0)
-        if xlen < len(cn_sentence):
-            trg_idx.pop()
-        else:
-            cn_idx.append(self.cn_eos())
-
-        trg_tensor = self.__cn_trg_idx_to_tensor(trg_idx)
-        y_tensor = self.__cn_y_idx_to_tensor(cn_idx)
-
-        return en_tensor, trg_tensor, y_tensor
-
     def __en_idx_to_tensor(self, en_idx: Iterator[int]) -> torch.Tensor:
-        enemv = []
+        l1 = []
+        l2 = []
+        indices = [l1, l2]
+        values = []
         i = 0
         for idx in en_idx:
+            l1.append(i)
+            l2.append(idx)
+            l1.append(i)
+            l2.append(self.sourceWordCount())
+            values.append(1)
+            values.append(i)
             i = i + 1
-            enemv.append(self.embed_position(self.en_embed, idx, i).tolist())
-        return torch.tensor(enemv)
+        return torch.sparse_coo_tensor(indices, values, (len(en_idx), self.sourceWordCount() + 1)).float().to_dense()
 
     def __cn_trg_idx_to_tensor(self, cn_idx: Iterator[int]) -> torch.Tensor:
-        cnemv = []
+        l1 = []
+        l2 = []
+        indices = [l1, l2]
+        values = []
         i = 0
         for idx in cn_idx:
+            l1.append(i)
+            l1.append(i)
+            l2.append(idx)
+            l2.append(self.targetWordCount())
+            values.append(1)
+            values.append(i)
             i = i + 1
-            cnemv.append(self.embed_position(self.cn_embed, idx, i).tolist())
-        return torch.tensor(cnemv)
+        return torch.sparse_coo_tensor(indices, values, (len(cn_idx), self.targetWordCount() + 1)).float().to_dense()
 
     def __cn_y_idx_to_tensor(self, cn_y: Iterator[int]) -> torch.Tensor:
-        return torch.tensor(list(map(lambda x: [x], cn_y)))
+        return torch.tensor(list(cn_y))
 
     def pair_idx2idx(self, l1: int, l2: int) -> int:
         e = self.len_idx[l1] - len(self.pair_dataset[l1][1]) - 1 + l2
@@ -184,24 +168,18 @@ class CnEnDataset(Dataset):
                 print(i, l1, l2, j)
             assert  j == i
 
-    def embed_position(self, embed, word_idx: int, pos: int):
-        return torch.cat((embed(torch.tensor(word_idx)), torch.tensor([ pos ])), 0)
-
     def __len__(self):
         return self.len_idx[-1]
 
     def __getitem__(self, index) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if index < 0:
             index = len(self) + index
-        if self.index_me is not None:
-            x, trg, y = self.index_me[index]
-            x_tensor = self.__en_idx_to_tensor(x)
-            trg_tensor = self.__cn_trg_idx_to_tensor(trg)
-            y_tensor = self.__cn_y_idx_to_tensor(y)
-            return x_tensor, trg_tensor, y_tensor
-        else:
-            l1, l2 = self.idx2pair_idx(index)
-            return self.__get_with_idx_and_len(l1, l2)
+        assert self.index_me is not None
+        x, trg, y = self.index_me[index]
+        x_tensor = self.__en_idx_to_tensor(x)
+        trg_tensor = self.__cn_trg_idx_to_tensor(trg)
+        y_tensor = self.__cn_y_idx_to_tensor(y)
+        return x_tensor, trg_tensor, y_tensor
 
     def __batch_index_generate(self) -> Iterator[List[int]]:
         for l1 in self.mapstore.keys():
@@ -244,6 +222,8 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
         trg = trg.to(device)
         y = y.to(device)
         pred = model(x, trg)
+        pred = pred.reshape(pred.shape[0] * pred.shape[1], pred.shape[2])
+        y    = y.reshape(y.shape[0] * y.shape[1])
         loss = loss_fn(pred, y)
 
         optimizer.zero_grad()
@@ -280,11 +260,13 @@ if __name__ == '__main__':
     dataset = CnEnDataset("../../datasets/cmn-eng/cmn.txt", EMBEDDING_SIZE, device, BATCH_SIZE, -1)
     # non-leaf tensor can't cross process boundary
     # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
-    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO), num_workers=4)
-    dataset.testIndexEx()
+    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO), num_workers=2)
+    # dataset.testIndexEx()
 
-    model = Transformer(heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4, dropout = 0.2, layers = 6, device = device)
+    model = Transformer(dataset.sourceWordCount(), dataset.targetWordCount(), 
+                        heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4,
+                        dropout = 0.2, layers = 6, device = device)
     load_model(model)
-    loss_fn = nn.L1Loss()
+    loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
     train(dataloader, model, loss_fn, optimizer)
