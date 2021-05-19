@@ -8,6 +8,7 @@ import io
 import math
 import random
 
+import numpy
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -16,6 +17,7 @@ from torch.utils.data import Dataset, DataLoader
 class CnEnDataset(Dataset):
     def __init__(self, file: str, embedding_size: int, device: str, batch_size: int, max_sample: int = -1):
         self.file = file
+        self.finished_epoch = 0
         self.device = device
         self.len_idx: List[int] = []
         self.mapstore = {}
@@ -206,17 +208,33 @@ class CnEnDataset(Dataset):
                     n = random.randrange(0, len(listme))
                 n = listme.pop(n)
                 yield self.batchs[n]
+            self.finished_epoch = self.finished_epoch + 1
 
 
 BATCH_SIZE = 300
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.001
 TRAIN_EPCHO = 1000
 EMBEDDING_SIZE = 256
 
 
+def weighted_avg_and_std(values, weights):
+    """
+    Return the weighted average and standard deviation.
+
+    values, weights -- Numpy ndarrays with the same shape.
+    """
+    average = numpy.average(values, weights=weights)
+    # Fast and numerically precise:
+    variance = numpy.average((values-average)**2, weights=weights)
+    return (average, math.sqrt(variance))
+
 def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
     print("begin training")
     i = 0
+    prev_epoch = 0
+    sample_count = 0
+    loss_list = []
+    loss_weight = []
     for x, trg, y in dataloader:
         x = x.to(device)
         trg = trg.to(device)
@@ -230,9 +248,17 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
         loss.backward()
         optimizer.step()
 
+        current_batch_size = x.shape[0]
+        sample_count = sample_count + current_batch_size
+        loss_list.append(float(loss))
+        loss_weight.append(current_batch_size)
         i = i + 1
         if i % 100 == 0:
-            print(f"device: {device}, batch: {i}, loss: {loss:>7f}")
+            loss_mean, loss_std = weighted_avg_and_std(loss_list, loss_weight)
+            sample_count = 0
+            loss_list = []
+            loss_weight = []
+            print(f"device: {device}, epoch: {dataloader.dataset.finished_epoch}, batch size: {BATCH_SIZE}, batch: {i}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
         if i % 1000 == 0:
             save_model(model)
 
@@ -268,5 +294,6 @@ if __name__ == '__main__':
                         dropout = 0.2, layers = 6, device = device)
     load_model(model)
     loss_fn = nn.CrossEntropyLoss()
+    # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
     optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
     train(dataloader, model, loss_fn, optimizer)
