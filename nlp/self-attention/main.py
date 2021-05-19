@@ -207,13 +207,18 @@ class CnEnDataset(Dataset):
                 if suffle:
                     n = random.randrange(0, len(listme))
                 n = listme.pop(n)
+                if len(listme) == 0:
+                    self.finished_epoch = self.finished_epoch + 1
                 yield self.batchs[n]
-            self.finished_epoch = self.finished_epoch + 1
+
+    def batchLen(self):
+        return len(self.batchs)
 
 
 BATCH_SIZE = 300
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.01
 TRAIN_EPCHO = 1000
+GONE_EPOCH = 8
 EMBEDDING_SIZE = 256
 
 
@@ -228,13 +233,16 @@ def weighted_avg_and_std(values, weights):
     variance = numpy.average((values-average)**2, weights=weights)
     return (average, math.sqrt(variance))
 
-def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
+def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, scheduler):
     print("begin training")
     i = 0
-    prev_epoch = 0
+    current_epoch = 0
     sample_count = 0
     loss_list = []
     loss_weight = []
+    batch_len = dataloader.dataset.batchLen()
+    general_loss_list = []
+    current_best_loss = -1
     for x, trg, y in dataloader:
         x = x.to(device)
         trg = trg.to(device)
@@ -248,19 +256,33 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer):
         loss.backward()
         optimizer.step()
 
+        i = i + 1
         current_batch_size = x.shape[0]
         sample_count = sample_count + current_batch_size
         loss_list.append(float(loss))
         loss_weight.append(current_batch_size)
-        i = i + 1
-        if i % 100 == 0:
+        epoch_finished = i % batch_len == 0
+        if epoch_finished or len(loss_list) == 100:
             loss_mean, loss_std = weighted_avg_and_std(loss_list, loss_weight)
-            sample_count = 0
             loss_list = []
             loss_weight = []
-            print(f"device: {device}, epoch: {dataloader.dataset.finished_epoch}, batch size: {BATCH_SIZE}, batch: {i}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
-        if i % 1000 == 0:
-            save_model(model)
+            general_loss_list.append(loss_mean)
+            print(f"device: {device}, epoch: {current_epoch}, batch size: {BATCH_SIZE}, batch: {i}, total sample: {sample_count}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
+            sample_count = 0
+        if epoch_finished:
+            current_epoch = current_epoch + 1
+            loss_mean = numpy.mean(general_loss_list)
+            if current_best_loss < 0:
+                current_best_loss = loss_mean
+            if loss_mean < current_best_loss:
+                print(f"save current best, loss mean: {loss_mean}")
+                save_model(model, loss_mean)
+                current_best_loss = loss_mean
+            else:
+                save_model(model)
+            general_loss_list = []
+            if scheduler is not None:
+                scheduler.step()
 
 def load_model(model: nn.Module):
     file = Path("model.pth")
@@ -268,9 +290,9 @@ def load_model(model: nn.Module):
         print("load model")
         model.load_state_dict(torch.load(file))
 
-def save_model(model: nn.Module):
+def save_model(model: nn.Module, postfix: str = ''):
     print("save model")
-    torch.save(model.state_dict(), "model.pth")
+    torch.save(model.state_dict(), f"model{postfix}.pth")
 
 def translate(model: nn.Module, dataset: CnEnDataset, eng_sentence: str) -> str:
     x = dataset.embed_a_case(eng_sentence, "")
@@ -286,7 +308,7 @@ if __name__ == '__main__':
     dataset = CnEnDataset("../../datasets/cmn-eng/cmn.txt", EMBEDDING_SIZE, device, BATCH_SIZE, -1)
     # non-leaf tensor can't cross process boundary
     # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
-    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO), num_workers=2)
+    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=False), num_workers=2)
     # dataset.testIndexEx()
 
     model = Transformer(dataset.sourceWordCount(), dataset.targetWordCount(), 
@@ -296,4 +318,7 @@ if __name__ == '__main__':
     loss_fn = nn.CrossEntropyLoss()
     # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
     optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
-    train(dataloader, model, loss_fn, optimizer)
+    # scheduler = None
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.95 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
+    print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
+    train(dataloader, model, loss_fn, optimizer, scheduler)
