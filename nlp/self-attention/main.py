@@ -5,6 +5,7 @@ from torchtext.data import get_tokenizer
 from typing import List, Tuple, Generator, Iterator
 from pathlib import Path
 import io
+import sys
 import math
 import random
 
@@ -108,7 +109,26 @@ class CnEnDataset(Dataset):
                 y.pop(0)
                 self.index_me.append((en_idx, trg, y))
     
-    def __en_idx_to_tensor(self, en_idx: Iterator[int]) -> torch.Tensor:
+    def eng_sentence2tensor(self, sentence: str) -> torch.Tensor:
+        return self.__en_idx_to_tensor(list(
+            map(
+                lambda word: self.en_word_to_idx[word], 
+                self.en_tokenizer(sentence)
+               )
+            )
+        )
+    
+    def cn_idx_list2sentence(self, idxlist: List[int]):
+        ll = map(lambda v: self.cn_idx_to_word[v], idxlist)
+        return ''.join(ll)
+
+    def cn_sentence(self, sentence: List[int]) -> torch.Tensor:
+        if sentence is None:
+            sentence = []
+        sentence.insert(0, self.cn_bos())
+        return self.__cn_trg_idx_to_tensor(sentence)
+    
+    def __en_idx_to_tensor(self, en_idx: List[int]) -> torch.Tensor:
         l1 = []
         l2 = []
         indices = [l1, l2]
@@ -216,9 +236,9 @@ class CnEnDataset(Dataset):
 
 
 BATCH_SIZE = 300
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.04
 TRAIN_EPCHO = 1000
-GONE_EPOCH = 8
+GONE_EPOCH = 0
 EMBEDDING_SIZE = 256
 
 
@@ -294,31 +314,50 @@ def save_model(model: nn.Module, postfix: str = ''):
     print("save model")
     torch.save(model.state_dict(), f"model{postfix}.pth")
 
+def list_max_index(l: List[float]):
+    m = 0
+    for i in range(len(l)):
+        if l[i] > l[m]:
+            m = i
+    return m
+
 def translate(model: nn.Module, dataset: CnEnDataset, eng_sentence: str) -> str:
-    x = dataset.embed_a_case(eng_sentence, "")
-    x = torch.tensor(x).to(device)
-    eos = dataset.cn_eos()
-    query = []
-    while True:
-        trg = dataset.getCnTarget(query)
-        pred = model(x, trg)
+    src = dataset.eng_sentence2tensor(eng_sentence).unsqueeze(0).to(device)
+    eng_len = src.shape[1]
+    trg = []
+    while len(trg) == 0 or trg[-1] != dataset.cn_eos():
+        trg = dataset.cn_sentence(trg).unsqueeze(0).to(device)
+        pred = model(src, trg)
+        trg = list(map(list_max_index, pred.squeeze(0).tolist()))
+        if len(trg) > eng_len * 20:
+            print(f"maybe translate fail!!! '{eng_sentence}'")
+            break
+    trg.pop()
+    return dataset.cn_idx_list2sentence(trg)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
     dataset = CnEnDataset("../../datasets/cmn-eng/cmn.txt", EMBEDDING_SIZE, device, BATCH_SIZE, -1)
     # non-leaf tensor can't cross process boundary
     # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
-    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=False), num_workers=2)
+    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=True), num_workers=2)
     # dataset.testIndexEx()
 
     model = Transformer(dataset.sourceWordCount(), dataset.targetWordCount(), 
                         heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4,
                         dropout = 0.2, layers = 6, device = device)
     load_model(model)
-    loss_fn = nn.CrossEntropyLoss()
-    # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
-    optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
-    # scheduler = None
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.95 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
-    print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
-    train(dataloader, model, loss_fn, optimizer, scheduler)
+    if len(sys.argv) == 1:
+        loss_fn = nn.CrossEntropyLoss()
+        # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
+        optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
+        # scheduler = None
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.99 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
+        print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
+        train(dataloader, model, loss_fn, optimizer, scheduler)
+    else:
+        ss = sys.argv[1:]
+        sentence = ' '.join(ss)
+        print(f"Origin: '{sentence}'")
+        trans = translate(model, dataset, sentence)
+        print(f"Target: '{trans}'")
