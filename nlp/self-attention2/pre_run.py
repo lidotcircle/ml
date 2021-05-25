@@ -89,9 +89,9 @@ def load_dataset(start: int = 0, end: int = -1) -> Tuple[List[List[int]], List[L
 
 def load_tokens() -> Tuple[List[str], List[str]]:
     with io.open(__en_tokens, mode="r", encoding = "utf-8") as en_tokens:
-        en_lines = en_tokens.read().split("\n")[0:-2]
+        en_lines = en_tokens.read().split("\n")[0:-1]
     with io.open(__cn_tokens, mode="r", encoding = "utf-8") as cn_tokens:
-        cn_lines = cn_tokens.read().split("\n")[0:-2]
+        cn_lines = cn_tokens.read().split("\n")[0:-1]
     return en_lines, cn_lines
 
 

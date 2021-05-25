@@ -194,11 +194,11 @@ class CnEnDataset(Dataset):
         return len(self.batchs)
 
 
-BATCH_SIZE = 300
+BATCH_SIZE = 500
 LEARNING_RATE = 0.08
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
-EMBEDDING_SIZE = 176
+EMBEDDING_SIZE = 280
 
 
 def weighted_avg_and_std(values, weights):
@@ -302,7 +302,7 @@ if __name__ == '__main__':
     dataset = CnEnDataset(EMBEDDING_SIZE, BATCH_SIZE)
     # non-leaf tensor can't cross process boundary
     # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
-    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=False), num_workers=2)
+    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=True), num_workers=2)
 
     model = Transformer(dataset.en_tokens_count(), dataset.cn_tokens_count(), 
                         heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4,
@@ -313,7 +313,7 @@ if __name__ == '__main__':
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
         optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
         # scheduler = None
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.98 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.995 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
         print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
         train(dataloader, model, loss_fn, optimizer, scheduler)
     else:
