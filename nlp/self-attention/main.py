@@ -15,6 +15,31 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
 
+class DampeningCos():
+    def __init__(self, min_lr: int, max_lr: int, dampen: float, cycle: int = 1):
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        self.dampen = dampen
+        self.cycle  = cycle
+        self.gone = 0
+
+    def __call__(self, epoch: int = None):
+        if epoch is None:
+            self.gone = self.goen + 1
+        else:
+            self.gone = epoch
+        ratio = self.gone / self.cycle
+        gone_cycle = math.floor(ratio)
+        phase = ratio - gone_cycle
+        max_lr = self.max_lr * (self.dampen ** gone_cycle)
+        min_lr = self.min_lr
+        if max_lr <= min_lr:
+            return min_lr
+        amplitude = max_lr - min_lr
+        res = (amplitude / 2) * math.cos(phase * 2 * math.pi) + amplitude / 2 + min_lr
+        return res
+
+
 class CnEnDataset(Dataset):
     def __init__(self, file: str, embedding_size: int, device: str, batch_size: int, max_sample: int = -1):
         self.file = file
@@ -236,7 +261,7 @@ class CnEnDataset(Dataset):
 
 
 BATCH_SIZE = 300
-LEARNING_RATE = 0.002
+LEARNING_RATE = 0.045
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
 EMBEDDING_SIZE = 176
@@ -275,6 +300,8 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
 
         i = i + 1
         current_batch_size = x.shape[0]
@@ -301,8 +328,6 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
             else:
                 save_model(model)
             general_loss_list = []
-            if scheduler is not None:
-                scheduler.step()
 
 def load_model(model: nn.Module):
     file = Path("model.pth")
@@ -351,8 +376,9 @@ if __name__ == '__main__':
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
         optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
+        lr = DampeningCos(0.25 * LEARNING_RATE, LEARNING_RATE, 1, 10)
         # scheduler = None
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: LEARNING_RATE)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: lr(epoch))
         # scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.2*LEARNING_RATE, max_lr=0.5*LEARNING_RATE, step_size_up=1)
         print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
         train(dataloader, model, loss_fn, optimizer, scheduler)
