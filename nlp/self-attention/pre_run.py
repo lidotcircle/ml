@@ -37,8 +37,8 @@ def __process_en():
             csv_lines.append(csv_line)
 
     with io.open(__en_tokens, "w", encoding="utf-8") as tokenfile:
-        tokens = list(map(lambda v: base64.b64encode(v.encode("utf-8")).decode("utf-8"), tokens))
-        tokenfile.write("\n".join(tokens))
+        tokens_list = list(map(lambda v: base64.b64encode(v.encode("utf-8")).decode("utf-8"), token_list))
+        tokenfile.write("\n".join(tokens_list))
     
     with io.open(__en_csv_dataset, "w", newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -63,8 +63,8 @@ def __process_cn():
             csv_lines.append(csv_line)
 
     with io.open(__cn_tokens, "w", encoding="utf-8") as tokenfile:
-        tokens = list(map(lambda v: base64.b64encode(v.encode("utf-8")).decode("utf-8"), tokens))
-        tokenfile.write("\n".join(tokens))
+        token_list = list(map(lambda v: base64.b64encode(v.encode("utf-8")).decode("utf-8"), token_list))
+        tokenfile.write("\n".join(token_list))
     
     with io.open(__cn_csv_dataset, "w", newline='') as csvfile:
         writer = csv.writer(csvfile)
