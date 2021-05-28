@@ -1,6 +1,7 @@
 import nltk
 import io
 import csv
+import base64
 from typing import Tuple, List
 
 
@@ -36,8 +37,8 @@ def __process_en():
             csv_lines.append(csv_line)
 
     with io.open(__en_tokens, "w", encoding="utf-8") as tokenfile:
-        for token in token_list:
-            tokenfile.write(token + "\n")
+        tokens = list(map(lambda v: base64.b64encode(v.encode("utf-8")).decode("utf-8"), tokens))
+        tokenfile.write("\n".join(tokens))
     
     with io.open(__en_csv_dataset, "w", newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -62,8 +63,8 @@ def __process_cn():
             csv_lines.append(csv_line)
 
     with io.open(__cn_tokens, "w", encoding="utf-8") as tokenfile:
-        for token in token_list:
-            tokenfile.write(token + "\n")
+        tokens = list(map(lambda v: base64.b64encode(v.encode("utf-8")).decode("utf-8"), tokens))
+        tokenfile.write("\n".join(tokens))
     
     with io.open(__cn_csv_dataset, "w", newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -90,9 +91,11 @@ def load_dataset(start: int = 0, end: int = -1) -> Tuple[List[List[int]], List[L
 
 def load_tokens() -> Tuple[List[str], List[str]]:
     with io.open(__en_tokens, mode="r", encoding = "utf-8") as en_tokens:
-        en_lines = en_tokens.read().split("\n")[0:-1]
+        tokens = en_tokens.read().split("\n")
+        en_lines = list(map(lambda v: base64.b64decode(v.encode("utf-8")).decode("utf-8"), tokens))
     with io.open(__cn_tokens, mode="r", encoding = "utf-8") as cn_tokens:
-        cn_lines = cn_tokens.read().split("\n")[0:-1]
+        tokens = cn_tokens.read().split("\n")
+        cn_lines = list(map(lambda v: base64.b64decode(v.encode("utf-8")).decode("utf-8"), tokens))
     return en_lines, cn_lines
 
 

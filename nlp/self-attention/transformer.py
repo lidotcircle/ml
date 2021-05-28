@@ -163,5 +163,6 @@ class Transformer(nn.Module):
         srcEnc = self.encoder(src)
         out = self.decoder(target, srcEnc)
         # return self.softmax(self.linearOut(out))
-        return self.linearOut(out)
+        res = self.linearOut(out).swapaxes(0, 1)
+        return res[0]
 

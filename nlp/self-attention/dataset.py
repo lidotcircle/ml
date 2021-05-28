@@ -85,6 +85,14 @@ class CnEnDataset(Dataset):
             values.append(i)
         return torch.sparse_coo_tensor(indices, values, (len(vallist), sparsesize + 1)).float()
 
+    def embed_x(self, xlist: List[int]):
+        return self.__list2tensor(xlist, len(self.en_tokens))
+
+    def embed_trg(self, trglist: List[int]):
+        trgl = list(trglist)
+        trgl.insert(0, self.__bos)
+        return self.__list2tensor(trgl, len(self.cn_tokens))
+
     def idx2tensor(self, idx: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if len(idx.shape) == 1:
             sam_idx, trg_len = idx.tolist()

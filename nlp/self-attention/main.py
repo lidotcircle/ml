@@ -49,8 +49,6 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
         trg = trg.to(device).to_dense()
         y = y.to(device)
         pred = model(x, trg)
-        pred = pred.swapaxes(0, 1)
-        pred = pred[0]
         loss = loss_fn(pred, y)
 
         optimizer.zero_grad()
@@ -110,7 +108,8 @@ def translate(model: nn.Module, dataset: CnEnDataset, eng_sentence: str) -> str:
     while len(trg_list) == 0 or trg_list[-1] != dataset.cn_eos():
         trg = dataset.embed_trg(trg_list).unsqueeze(0).to_dense().to(device)
         pred = model(src, trg)
-        y = list(map(list_max_index, pred.squeeze(0).tolist()))
+        pred = torch.softmax(pred, dim = 1).squeeze(0).tolist()
+        y = list_max_index(pred)
         trg_list.append(y)
         if len(trg_list) > eng_len * 20:
             print(f"maybe translate fail!!! '{eng_sentence}'")
