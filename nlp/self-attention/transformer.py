@@ -152,8 +152,6 @@ class Transformer(nn.Module):
         assert targetWordCount > 0
         self.srcEmbedMatrix = nn.Linear(sourceWordCount + 1, embedding_size).to(device)
         self.dstEmbedMatrix = nn.Linear(targetWordCount + 1, embedding_size).to(device)
-        # self.srcEmbedMatrix.requires_grad_(False)
-        # self.dstEmbedMatrix.requires_grad_(False)
         self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers, device)
         self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
         self.linearOut = nn.Linear(embedding_size, targetWordCount).to(device)
