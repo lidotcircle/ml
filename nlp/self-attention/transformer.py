@@ -168,48 +168,23 @@ class Transformer(nn.Module):
         self.linearOut = nn.Linear(embedding_size, targetWordCount).to(device)
         # self.softmax = nn.Softmax(dim = 2).to(device)
     
-    def __position_tensor(self, tensor: torch.Tensor, posLength: int) -> torch.Tensor:
-        s = [tensor.shape[0] * tensor.shape[1], posLength]
-        l1 = []
-        l2 = []
-        val = [ 1 ] * tensor.shape[0] * tensor.shape[1]
-        for _ in range(tensor.shape[0]):
-            for j in range(tensor.shape[1]):
-                l1.append(len(l1))
-                l2.append(j)
-        return torch.sparse_coo_tensor([l1, l2], val, s, dtype=torch.float)
-
-    def __word_index_tensor(self, tensor: torch.Tensor, wordCount: int) -> torch.Tensor:
-        s = [tensor.shape[0] * tensor.shape[1], wordCount]
-        l1 = []
-        l2 = []
-        val = [ 1 ] * tensor.shape[0] * tensor.shape[1]
-        for i in range(tensor.shape[0]):
-            for j in range(tensor.shape[1]):
-                l1.append(len(l1))
-                l2.append(tensor[i][j])
-        return torch.sparse_coo_tensor([l1, l2], val, s, dtype=torch.float)
-
-    def forward(self, src: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        assert len(src.shape) == 2 and len(target.shape) == 2
-        src_shape = src.shape
-        target_shape = target.shape
-        src_idx = self.__word_index_tensor(src, self.sourceWordCount)
-        src_pos = self.__position_tensor(src, self.sourceSentenceMaxLength)
-        trg_idx = self.__word_index_tensor(target, self.targetWordCount)
-        trg_pos = self.__position_tensor(target, self.targetSentenceMaxLength)
+    def forward(self, batch_size: int, xseq_length: int, trgseq_length: int, src: torch.Tensor, trg: torch.Tensor) -> torch.Tensor:
+        src_idx = torch.sparse_coo_tensor(src[0][0:2], src[0][2], [src.shape[2], self.sourceWordCount], dtype=torch.float)
+        src_pos = torch.sparse_coo_tensor(src[1][0:2], src[1][2], [src.shape[2], self.sourceSentenceMaxLength], dtype=torch.float)
+        trg_idx = torch.sparse_coo_tensor(trg[0][0:2], trg[0][2], [trg.shape[2], self.targetWordCount], dtype=torch.float)
+        trg_pos = torch.sparse_coo_tensor(trg[1][0:2], trg[1][2], [trg.shape[2], self.targetSentenceMaxLength], dtype=torch.float)
 
         src_idx = self.srcEmbedMatrix(src_idx.to(self.__device))
         src_pos = self.srcPostionEmbedding(src_pos.to(self.__device))
         src = src_idx + src_pos
-        src = src.reshape(src_shape[0], src_shape[1], src.shape[1])
+        src = src.reshape(batch_size, xseq_length, src.shape[1])
         trg_idx = self.dstEmbedMatrix(trg_idx.to(self.__device))
         trg_pos = self.dstPostionEmbedding(trg_pos.to(self.__device))
-        target = trg_idx + trg_idx
-        target = target.reshape(target_shape[0], target_shape[1], target.shape[1])
+        trg = trg_idx + trg_idx
+        trg = trg.reshape(batch_size, trgseq_length, trg.shape[1])
 
         srcEnc = self.encoder(src)
-        out = self.decoder(target, srcEnc)
+        out = self.decoder(trg, srcEnc)
         # return self.softmax(self.linearOut(out))
         return self.linearOut(out)
 

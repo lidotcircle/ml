@@ -43,13 +43,9 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
     batch_len = dataset.batchLen()
     general_loss_list = []
     current_best_loss = -1
-    for idx in dataloader:
-        x, trg, y = dataloader.dataset.idx2tensor(idx)
-        x = x.to(device)
-        trg = trg.to(device)
+    for batch_size, xseq_length, trgseq_length, x, trg, y in dataloader:
         y = y.to(device)
-        # print(f"src: <{dataset.en_tensor2sentence(x[0])}>, trg: <{dataset.cn_tensor2sentence(trg[0])}>, y: <{dataset.cn_scalar2word(y[0][-1])}>")
-        pred = model(x, trg)
+        pred = model(batch_size, xseq_length, trgseq_length, x, trg)
         pred = pred.reshape(pred.shape[0] * pred.shape[1], pred.shape[2])
         y    = y.reshape(y.shape[0] * y.shape[1])
         loss = loss_fn(pred, y)
@@ -104,30 +100,79 @@ def list_max_index(l: List[float]):
             m = i
     return m
 
-def translate(model: nn.Module, dataset: CnEnDataset, eng_sentence: str) -> str:
-    src = pre_run.en_tokenizer(eng_sentence)
-    src = dataset.embed_x(src).unsqueeze(0).to_dense().to(device)
-    eng_len = src.shape[1]
+def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str) -> str:
+    src = pre_run.en_tokenizer(src_sentence)
+    src = dataset.embed_x(pre_run.en_tokenizer(src_sentence))
+    eng_len = src.shape[0]
     trg_list = []
     while len(trg_list) == 0 or trg_list[-1] != dataset.cn_eos():
-        trg = dataset.embed_trg(trg_list).unsqueeze(0).to_dense().to(device)
-        pred = model(src, trg)
+        trg = dataset.embed_trg(trg_list)
+        batch_size, xseq_length, trgseq_length, x, trg, _ = wrap_collate_fn([(src, trg, torch.tensor([]))])
+        pred = model(batch_size, xseq_length, trgseq_length, x, trg)
         pred = torch.softmax(pred, dim = 2).squeeze(0).tolist()
         pred = pred[-1]
         y = list_max_index(pred)
         trg_list.append(y)
         if len(trg_list) > eng_len * 20:
-            print(f"maybe translate fail!!! '{eng_sentence}'")
+            print(f"maybe translate fail!!! '{src_sentence}'")
             break
     trg_list.pop()
     return dataset.cn_idx_list2sentence(trg_list)
+
+
+def position_tensor(sentenceLength: int, posLength: int) -> torch.Tensor:
+    s = [sentenceLength, posLength]
+    l1 = []
+    l2 = []
+    val = [ 1 ] * sentenceLength
+    for i in range(sentenceLength):
+        l1.append(len(l1))
+        l2.append(i)
+    return torch.sparse_coo_tensor([l1, l2], val, s, dtype=torch.float)
+
+
+def __position_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    l1 = []
+    l2 = []
+    val = [ 1 ] * tensor.shape[0] * tensor.shape[1]
+    for _ in range(tensor.shape[0]):
+        for j in range(tensor.shape[1]):
+            l1.append(len(l1))
+            l2.append(j)
+    return torch.tensor([l1, l2, val])
+
+def __word_index_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    l1 = []
+    l2 = []
+    val = [ 1 ] * tensor.shape[0] * tensor.shape[1]
+    for i in range(tensor.shape[0]):
+        for j in range(tensor.shape[1]):
+            l1.append(len(l1))
+            l2.append(tensor[i][j])
+    return torch.tensor([l1, l2, val])
+
+def wrap_collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
+    x0, trg0, _ = batch[0]
+    batch_size = len(batch)
+    xseq_length = x0.shape[0]
+    trgseq_length = trg0.shape[0]
+    x, trg, y = zip(*batch)
+    x = torch.stack(x, dim = 0)
+    trg = torch.stack(trg, dim = 0)
+    y = torch.stack(y, dim= 0)
+    xword = __word_index_tensor(x)
+    xpos = __position_tensor(x)
+    trgword = __word_index_tensor(trg)
+    trgpos = __position_tensor(trg)
+    return batch_size, xseq_length, trgseq_length, torch.stack([xword, xpos], dim = 0), torch.stack([trgword, trgpos], dim = 0), y
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
     dataset = CnEnDataset(EMBEDDING_SIZE, BATCH_SIZE)
     # non-leaf tensor can't cross process boundary
     # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
-    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=True), num_workers=2)
+    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=True), collate_fn=wrap_collate_fn, num_workers=2)
 
     model = Transformer(dataset.en_tokens_count(), dataset.cn_tokens_count(), 
                         heads = 5, embedding_size = EMBEDDING_SIZE, expansion = 4,

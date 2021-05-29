@@ -112,27 +112,6 @@ class CnEnDataset(Dataset):
         trgl.insert(0, self.__bos)
         return self.__list2tensor(trgl, len(self.cn_tokens))
 
-    def idx2tensor(self, idx: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if len(idx.shape) == 1:
-            sam_idx, trg_len = idx.tolist()
-            x = self.__en_sample_index2tensor(sam_idx)
-            trg, y = self.__cn_sample_index2tensor(sam_idx, trg_len)
-            return x, trg, y
-        else:
-            indices = torch.unbind(idx, dim = 0)
-            xl = []
-            trgl = []
-            yl = []
-            for ix in indices:
-                x, trg, y = self.idx2tensor(ix)
-                xl.append(x)
-                trgl.append(trg)
-                yl.append(y)
-            x = torch.stack(xl, dim = 0)
-            trg = torch.stack(trgl, dim = 0)
-            y = torch.stack(yl, dim = 0)
-            return x, trg, y
-
     def __pair_idx2idx(self, l1: int, l2: int) -> int:
         return self.len_idx[l1] - len(self.cn_sentences[l1]) - 1 + l2
 
@@ -162,11 +141,13 @@ class CnEnDataset(Dataset):
     def __len__(self):
         return self.len_idx[-1]
 
-    def __getitem__(self, index) -> torch.Tensor:
+    def __getitem__(self, index) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if index < 0:
             index = len(self) + index
         a, b = self.__idx2pair_idx(index)
-        return torch.tensor([a, b])
+        x = self.__en_sample_index2tensor(a)
+        trg, y = self.__cn_sample_index2tensor(a, b)
+        return x, trg, y
 
     def __batch_index_generate(self) -> Iterator[List[int]]:
         for l1 in self.mapstore.keys():
