@@ -67,9 +67,39 @@ class CnEnDataset(Dataset):
         trg.insert(0, self.__bos)
         if _len == len(cn_sent):
             trg.append(self.__eos)
-        y = trg.pop()
+        y = list(trg)
+        trg.pop()
+        y.pop(0)
         size = len(self.cn_tokens)
         return self.__list2tensor(trg, size), torch.tensor(y)
+
+    def en_tensor2sentence(self, tensor: torch.Tensor) -> str:
+        assert len(tensor.shape) == 2
+        pos = []
+        for i in range(tensor.shape[0]):
+            for j in range(tensor.shape[1]):
+                if tensor[i][j] != 0:
+                    pos.append(j)
+                    break
+        text = map(lambda v: self.en_tokens[v], pos)
+        return " ".join(text)
+
+    def cn_tensor2sentence(self, tensor: torch.Tensor) -> str:
+        assert len(tensor.shape) == 2
+        pos = []
+        for i in range(tensor.shape[0]):
+            for j in range(tensor.shape[1]):
+                if tensor[i][j] != 0:
+                    pos.append(j)
+                    break
+        text = map(lambda v: self.cn_tokens[v], pos)
+        return "".join(text)
+
+    def cn_scalar2word(self, scalar: torch.Tensor) -> str:
+        if type(scalar) == torch.Tensor:
+            assert len(scalar.shape) == 0
+            scalar = scalar.tolist()
+        return self.cn_tokens[scalar]
     
     def __list2tensor(self, vallist: List[int], sparsesize: int):
         l1 = []

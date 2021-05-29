@@ -14,8 +14,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 
-BATCH_SIZE = 500
-LEARNING_RATE = 0.09
+BATCH_SIZE = 300
+LEARNING_RATE = 0.08
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
 EMBEDDING_SIZE = 100
@@ -48,7 +48,10 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
         x = x.to(device).to_dense()
         trg = trg.to(device).to_dense()
         y = y.to(device)
+        # print(f"src: <{dataset.en_tensor2sentence(x[0])}>, trg: <{dataset.cn_tensor2sentence(trg[0])}>, y: <{dataset.cn_scalar2word(y[0][-1])}>")
         pred = model(x, trg)
+        pred = pred.reshape(pred.shape[0] * pred.shape[1], pred.shape[2])
+        y    = y.reshape(y.shape[0] * y.shape[1])
         loss = loss_fn(pred, y)
 
         optimizer.zero_grad()
@@ -71,10 +74,11 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
         if epoch_finished:
             current_epoch = current_epoch + 1
             loss_mean = numpy.mean(general_loss_list)
+            print(f"loss mean: {loss_mean}")
             if current_best_loss < 0:
                 current_best_loss = loss_mean
             if loss_mean < current_best_loss:
-                print(f"save current best, loss mean: {loss_mean}")
+                print(f"save current best")
                 save_model(model, loss_mean)
                 current_best_loss = loss_mean
             else:
@@ -84,14 +88,14 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
                 scheduler.step()
 
 def load_model(model: nn.Module):
-    file = Path("model.pth")
+    file = Path("saved_model/model.pth")
     if file.is_file():
         print("load model")
         model.load_state_dict(torch.load(file))
 
 def save_model(model: nn.Module, postfix: str = ''):
     print("save model")
-    torch.save(model.state_dict(), f"model{postfix}.pth")
+    torch.save(model.state_dict(), f"saved_model/model{postfix}.pth")
 
 def list_max_index(l: List[float]):
     m = 0
@@ -108,7 +112,8 @@ def translate(model: nn.Module, dataset: CnEnDataset, eng_sentence: str) -> str:
     while len(trg_list) == 0 or trg_list[-1] != dataset.cn_eos():
         trg = dataset.embed_trg(trg_list).unsqueeze(0).to_dense().to(device)
         pred = model(src, trg)
-        pred = torch.softmax(pred, dim = 1).squeeze(0).tolist()
+        pred = torch.softmax(pred, dim = 2).squeeze(0).tolist()
+        pred = pred[-1]
         y = list_max_index(pred)
         trg_list.append(y)
         if len(trg_list) > eng_len * 20:
