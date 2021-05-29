@@ -29,7 +29,6 @@ def __process_en():
         for line in lines:
             csv_line = []
             for token in nltk.word_tokenize(line):
-                token = token.lower()
                 if token not in tokens:
                     tokens[token] = len(token_list)
                     token_list.append(token)
@@ -110,7 +109,7 @@ def __get_en_token_map():
 def en_tokenizer(sentence: str) -> List[int]:
     __en_token_map = __get_en_token_map()
     return list(map(
-        lambda word: __en_token_map[word.lower()],
+        lambda word: __en_token_map[word],
         nltk.word_tokenize(sentence)
     ))
 

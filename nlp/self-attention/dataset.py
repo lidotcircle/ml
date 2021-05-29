@@ -40,6 +40,10 @@ class CnEnDataset(Dataset):
         self.batch_size = batch_size
         self.batchs = list(self.__batch_index_generate())
 
+    def adjust_batch_size(self, newbatch_size):
+        self.batch_size = newbatch_size
+        self.batchs = list(self.__batch_index_generate())
+
     def cn_bos(self):
         return self.__bos
 

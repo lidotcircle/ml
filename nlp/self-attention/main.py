@@ -6,19 +6,20 @@ import pre_run
 from typing import List, Tuple, Generator, Iterator
 from pathlib import Path
 import sys
+import time
 import math
 
 import numpy
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 
-BATCH_SIZE = 300
+BATCH_SIZE = 150
 LEARNING_RATE = 0.08
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
-EMBEDDING_SIZE = 100
+EMBEDDING_SIZE = 216
 
 
 def weighted_avg_and_std(values, weights):
@@ -32,9 +33,14 @@ def weighted_avg_and_std(values, weights):
     variance = numpy.average((values-average)**2, weights=weights)
     return (average, math.sqrt(variance))
 
-def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, scheduler):
+def train(dataset: Dataset, model: nn.Module, loss_fn, optimizer, scheduler):
     print("begin training")
-    dataset: CnEnDataset = dataloader.dataset
+    # non-leaf tensor can't cross process boundary
+    # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
+    dataloader = DataLoader(dataset, 
+                            batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=True), 
+                            collate_fn=wrap_collate_fn, 
+                            num_workers=2)
     i = 0
     current_epoch = 0
     sample_count = 0
@@ -43,6 +49,7 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
     batch_len = dataset.batchLen()
     general_loss_list = []
     current_best_loss = -1
+    last_save = time.time()
     for batch_size, xseq_length, trgseq_length, x, trg, y in dataloader:
         y = y.to(device)
         pred = model(batch_size, xseq_length, trgseq_length, x, trg)
@@ -55,11 +62,16 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
         optimizer.step()
 
         i = i + 1
-        current_batch_size = x.shape[0]
+        current_batch_size = batch_size
         sample_count = sample_count + current_batch_size
         loss_list.append(float(loss))
         loss_weight.append(current_batch_size)
         epoch_finished = i % batch_len == 0
+
+        if (time.time() - last_save) > 15 * 60:
+            last_save = time.time()
+            save_model(model)
+
         if epoch_finished or len(loss_list) == 100:
             loss_mean, loss_std = weighted_avg_and_std(loss_list, loss_weight)
             loss_list = []
@@ -170,13 +182,9 @@ def wrap_collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
     dataset = CnEnDataset(EMBEDDING_SIZE, BATCH_SIZE)
-    # non-leaf tensor can't cross process boundary
-    # crash when num_workers > 4 in windows "OSError: (WinError 1455) The paging file is too small for this operation to complete"
-    dataloader = DataLoader(dataset, batch_sampler=dataset.batchSampler(TRAIN_EPCHO, suffle=True), collate_fn=wrap_collate_fn, num_workers=2)
-
     model = Transformer(dataset.en_tokens_count(), dataset.cn_tokens_count(), 
-                        heads = 5, embedding_size = EMBEDDING_SIZE, expansion = 4,
-                        dropout = 0.08, layers = 6, device = device)
+                        heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4,
+                        dropout = 0.12, layers = 6, device = device)
     load_model(model)
     if len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
@@ -185,7 +193,21 @@ if __name__ == '__main__':
         # scheduler = None
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.995 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
         print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
-        train(dataloader, model, loss_fn, optimizer, scheduler)
+
+        while True:
+            try:
+                train(dataset, model, loss_fn, optimizer, scheduler)
+            except RuntimeError as e:
+                if 'out of meomory' in str(e):
+                    print("|Warning: out of memory")
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            del p.grad
+                    torch.cuda.empty_cache()
+                    BATCH_SIZE = BATCH_SIZE * 0.8
+                    dataset.adjust_batch_size(BATCH_SIZE)
+                else:
+                    raise e
     else:
         ss = sys.argv[1:]
         sentence = ' '.join(ss)
