@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from typing import List
 
 
 class MultiHeadAttention(nn.Module):
@@ -141,6 +142,8 @@ class Transformer(nn.Module):
     def __init__(self, 
             sourceWordCount: int,
             targetWordCount: int,
+            sourceSentenceMaxLength: int = 1000,
+            targetSentenceMaxLength: int = 1000,
             heads: int = 8, 
             embedding_size: int = 64, 
             expansion: int = 4, 
@@ -150,16 +153,61 @@ class Transformer(nn.Module):
             ):
         super(Transformer, self).__init__()
         assert targetWordCount > 0
-        self.srcEmbedMatrix = nn.Linear(sourceWordCount + 1, embedding_size).to(device)
-        self.dstEmbedMatrix = nn.Linear(targetWordCount + 1, embedding_size).to(device)
+        self.srcEmbedMatrix = nn.Linear(sourceWordCount, embedding_size).to(device)
+        self.dstEmbedMatrix = nn.Linear(targetWordCount, embedding_size).to(device)
+        self.srcPostionEmbedding = nn.Linear(sourceSentenceMaxLength, embedding_size).to(device)
+        self.dstPostionEmbedding = nn.Linear(targetSentenceMaxLength, embedding_size).to(device)
+        self.sourceWordCount = sourceWordCount
+        self.targetWordCount = targetWordCount
+        self.sourceSentenceMaxLength = sourceSentenceMaxLength
+        self.targetSentenceMaxLength = targetSentenceMaxLength
+        self.__device = device
+
         self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers, device)
         self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
         self.linearOut = nn.Linear(embedding_size, targetWordCount).to(device)
         # self.softmax = nn.Softmax(dim = 2).to(device)
+    
+    def __position_tensor(self, tensor: torch.Tensor, posLength: int) -> torch.Tensor:
+        s = [tensor.shape[0] * tensor.shape[1], posLength]
+        l1 = []
+        l2 = []
+        val = [ 1 ] * tensor.shape[0] * tensor.shape[1]
+        for _ in range(tensor.shape[0]):
+            for j in range(tensor.shape[1]):
+                l1.append(len(l1))
+                l2.append(j)
+        return torch.sparse_coo_tensor([l1, l2], val, s, dtype=torch.float)
+
+    def __word_index_tensor(self, tensor: torch.Tensor, wordCount: int) -> torch.Tensor:
+        s = [tensor.shape[0] * tensor.shape[1], wordCount]
+        l1 = []
+        l2 = []
+        val = [ 1 ] * tensor.shape[0] * tensor.shape[1]
+        for i in range(tensor.shape[0]):
+            for j in range(tensor.shape[1]):
+                l1.append(len(l1))
+                l2.append(tensor[i][j])
+        return torch.sparse_coo_tensor([l1, l2], val, s, dtype=torch.float)
 
     def forward(self, src: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        src = self.srcEmbedMatrix(src)
-        target = self.dstEmbedMatrix(target)
+        assert len(src.shape) == 2 and len(target.shape) == 2
+        src_shape = src.shape
+        target_shape = target.shape
+        src_idx = self.__word_index_tensor(src, self.sourceWordCount)
+        src_pos = self.__position_tensor(src, self.sourceSentenceMaxLength)
+        trg_idx = self.__word_index_tensor(target, self.targetWordCount)
+        trg_pos = self.__position_tensor(target, self.targetSentenceMaxLength)
+
+        src_idx = self.srcEmbedMatrix(src_idx.to(self.__device))
+        src_pos = self.srcPostionEmbedding(src_pos.to(self.__device))
+        src = src_idx + src_pos
+        src = src.reshape(src_shape[0], src_shape[1], src.shape[1])
+        trg_idx = self.dstEmbedMatrix(trg_idx.to(self.__device))
+        trg_pos = self.dstPostionEmbedding(trg_pos.to(self.__device))
+        target = trg_idx + trg_idx
+        target = target.reshape(target_shape[0], target_shape[1], target.shape[1])
+
         srcEnc = self.encoder(src)
         out = self.decoder(target, srcEnc)
         # return self.softmax(self.linearOut(out))

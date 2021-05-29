@@ -45,8 +45,8 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer, schedule
     current_best_loss = -1
     for idx in dataloader:
         x, trg, y = dataloader.dataset.idx2tensor(idx)
-        x = x.to(device).to_dense()
-        trg = trg.to(device).to_dense()
+        x = x.to(device)
+        trg = trg.to(device)
         y = y.to(device)
         # print(f"src: <{dataset.en_tensor2sentence(x[0])}>, trg: <{dataset.cn_tensor2sentence(trg[0])}>, y: <{dataset.cn_scalar2word(y[0][-1])}>")
         pred = model(x, trg)

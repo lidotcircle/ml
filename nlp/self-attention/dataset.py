@@ -101,19 +101,8 @@ class CnEnDataset(Dataset):
             scalar = scalar.tolist()
         return self.cn_tokens[scalar]
     
-    def __list2tensor(self, vallist: List[int], sparsesize: int):
-        l1 = []
-        l2 = []
-        indices = [l1, l2]
-        values = []
-        for i in range(len(vallist)):
-            l1.append(i)
-            l2.append(vallist[i])
-            l1.append(i)
-            l2.append(sparsesize)
-            values.append(1)
-            values.append(i)
-        return torch.sparse_coo_tensor(indices, values, (len(vallist), sparsesize + 1)).float()
+    def __list2tensor(self, vallist: List[int], _: int):
+        return torch.tensor(vallist)
 
     def embed_x(self, xlist: List[int]):
         return self.__list2tensor(xlist, len(self.en_tokens))
