@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from transformer import Transformer
+from torchtext.data.metrics import bleu_score
 from dataset import CnEnDataset
 import pre_run
 from typing import List, Tuple, Generator, Iterator
@@ -10,6 +11,7 @@ import io
 import sys
 import time
 import math
+import json
 
 import numpy
 import torch
@@ -114,7 +116,7 @@ def list_max_index(l: List[float]):
             m = i
     return m
 
-def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str) -> str:
+def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str, silent: bool = False) -> str:
     src = pre_run.en_tokenizer(src_sentence)
     src = dataset.embed_x(pre_run.en_tokenizer(src_sentence))
     eng_len = src.shape[0]
@@ -128,10 +130,28 @@ def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str) -> str:
         y = list_max_index(pred)
         trg_list.append(y)
         if len(trg_list) > eng_len * 20:
-            print(f"maybe translate fail!!! '{src_sentence}'")
+            if not silent:
+                print(f"maybe translate fail!!! '{src_sentence}'")
             break
     trg_list.pop()
     return dataset.cn_idx_list2sentence(trg_list)
+
+
+def eval_bleu(model: nn.Module, dataset: CnEnDataset, test_cases: List[Tuple[str, List[str]]]):
+    candidateslist = []
+    refslist = []
+    i = 0
+    for src, refs in test_cases:
+        i = i + 1
+        candidate = translate(model, dataset, src, True)
+        candidateslist.append(list(candidate))
+        refslist.append(list(map(lambda v: list(v), refs)))
+        if i % 10 == 0:
+            print(f"BLEU: evaluated {i} cases")
+            print(bleu_score(candidateslist, refslist))
+    score = bleu_score(candidateslist, refslist)
+    print(f"bleu score: {score}")
+    return score
 
 
 def position_tensor(sentenceLength: int, posLength: int) -> torch.Tensor:
@@ -230,6 +250,10 @@ if __name__ == '__main__':
 
         __save_tensor2csv(dataset.get_src_pos_distances(list(range(100))), "./running_data/src_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
         __save_tensor2csv(dataset.get_trg_pos_distances(list(range(100))), "./running_data/trg_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
+    elif len(sys.argv) == 2 and sys.argv[1] == "-e":
+        print("Evaluating BLEU Score")
+        testcases = pre_run.load_testcases()
+        eval_bleu(model, dataset, testcases)
     elif len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)

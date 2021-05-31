@@ -1,6 +1,6 @@
 
 **/__pycache__
 **/model*.pth
-**/saved_model
-**/running_data
+**/saved_model*
+**/running_data*
 .vscode
