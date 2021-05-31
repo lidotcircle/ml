@@ -165,12 +165,23 @@ def __word_index_tensor(tensor: torch.Tensor) -> torch.Tensor:
             l2.append(tensor[i][j])
     return torch.tensor([l1, l2, val])
 
-def __save_tensor2csv(t: torch.Tensor, fn: str, header: List[str] = None):
-    with io.open(fn, "w", newline="") as sf:
+def __save_tensor2csv(t: torch.Tensor, fn: str, header: List[str] = None, vmap = None):
+    with io.open(fn, "w", encoding="utf-8-sig", newline="") as sf:
         writer = csv.writer(sf)
+        l = t.tolist()
+
+        if vmap is not None:
+            for i in range(len(l)):
+                for j in range(len(l[0])):
+                    l[i][j] = vmap(l[i][j])
+
         if header is not None:
+            for i in range(len(header)):
+                l[i].insert(0, header[i])
+            header.insert(0, "")
             writer.writerow(header)
-        writer.writerows(t.tolist())
+
+        writer.writerows(l)
 
 def save_embed_matrix(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, d: torch.Tensor):
     __save_tensor2csv(a, "./running_data/src_embed")
@@ -209,9 +220,16 @@ if __name__ == '__main__':
     load_model(model)
     if not embed_grad:
         dataset.set_embed_matrics(*model.embedMatrics())
-    # swords = ["wait", "Wait", "go", "hello"]
-    # __save_tensor2csv(dataset.get_src_word_distances(swords), "./running_data/trg_word_distance.csv", swords)
-    # exit()
+    swords = dataset.en_tokens[0:500]
+    __save_tensor2csv(dataset.get_src_word_distances(swords), "./running_data/src_word_distance.csv", swords, lambda v: v if v < 0.2 else "")
+
+    twords = dataset.cn_tokens[0:-1]
+    __save_tensor2csv(dataset.get_trg_word_distances(twords), "./running_data/trg_word_distance.csv", twords, lambda v: v if v < 0.2 else "")
+
+    __save_tensor2csv(dataset.get_src_pos_distances(list(range(100))), "./running_data/src_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
+    __save_tensor2csv(dataset.get_trg_pos_distances(list(range(100))), "./running_data/trg_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
+
+    exit()
     if len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)

@@ -63,6 +63,12 @@ class CnEnDataset(Dataset):
     def get_trg_word_distances(self, words: List[str]):
         return self.__get_distances(self.__trg_embed_matrix, words, self.cn_tokens)
 
+    def get_src_pos_distances(self, posL: List[str]):
+        return self.__get_distances(self.__src_pos_embed_matrix, posL)
+
+    def get_trg_pos_distances(self, posL: List[str]):
+        return self.__get_distances(self.__trg_pos_embed_matrix, posL)
+
     def adjust_batch_size(self, newbatch_size):
         self.batch_size = newbatch_size
         self.batchs = list(self.__batch_index_generate())
