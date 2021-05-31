@@ -39,6 +39,29 @@ class CnEnDataset(Dataset):
                 storel1[v].append(i)
         self.batch_size = batch_size
         self.batchs = list(self.__batch_index_generate())
+        self.__src_embed_matrix = None
+        self.__src_pos_embed_matrix = None
+        self.__trg_embed_matrix = None
+        self.__trg_pos_embed_matrix = None
+
+    def set_embed_matrics(self, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, d: torch.Tensor):
+        self.__src_embed_matrix = a
+        self.__src_pos_embed_matrix = b
+        self.__trg_embed_matrix = c
+        self.__trg_pos_embed_matrix = d
+
+    def __get_distances(self, matrix: torch.Tensor, words: List[str], tokens_list: List[str] = None):
+        if tokens_list is not None:
+            words = list(map(lambda v: tokens_list.index(v), words))
+        mx = list(map(lambda v: matrix[v], words))
+        mat = torch.stack(mx, dim = 0)
+        return torch.cdist(mat, mat, p = 2)
+
+    def get_src_word_distances(self, words: List[str]):
+        return self.__get_distances(self.__src_embed_matrix, words, self.en_tokens)
+
+    def get_trg_word_distances(self, words: List[str]):
+        return self.__get_distances(self.__trg_embed_matrix, words, self.cn_tokens)
 
     def adjust_batch_size(self, newbatch_size):
         self.batch_size = newbatch_size

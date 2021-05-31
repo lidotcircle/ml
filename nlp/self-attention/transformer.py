@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
-from typing import List
+from typing import List, Tuple
+
+from torch.nn.modules import transformer
 
 
 class MultiHeadAttention(nn.Module):
@@ -149,6 +151,7 @@ class Transformer(nn.Module):
             expansion: int = 4, 
             dropout: float = 0.2, 
             layers: int = 6,
+            embed_grad: bool = True,
             device: str = 'cpu'
             ):
         super(Transformer, self).__init__()
@@ -157,6 +160,11 @@ class Transformer(nn.Module):
         self.dstEmbedMatrix = nn.Linear(targetWordCount, embedding_size).to(device)
         self.srcPostionEmbedding = nn.Linear(sourceSentenceMaxLength, embedding_size).to(device)
         self.dstPostionEmbedding = nn.Linear(targetSentenceMaxLength, embedding_size).to(device)
+        self.srcEmbedMatrix.requires_grad_(embed_grad)
+        self.dstEmbedMatrix.requires_grad_(embed_grad)
+        self.srcPostionEmbedding.requires_grad_(embed_grad)
+        self.dstPostionEmbedding.requires_grad_(embed_grad)
+
         self.sourceWordCount = sourceWordCount
         self.targetWordCount = targetWordCount
         self.sourceSentenceMaxLength = sourceSentenceMaxLength
@@ -167,24 +175,51 @@ class Transformer(nn.Module):
         self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
         self.linearOut = nn.Linear(embedding_size, targetWordCount).to(device)
         # self.softmax = nn.Softmax(dim = 2).to(device)
+
+    @staticmethod
+    def __linear2tensor(linear: nn.Linear) -> torch.Tensor:
+        linear = linear.to("cpu")
+        tensor = torch.Tensor(linear.in_features, linear.out_features)
+        for i in range(linear.in_features):
+            idx = torch.sparse_coo_tensor([[i]], [1], [linear.in_features], dtype=torch.float)
+            val = linear(idx)
+            tensor[i] = val
+        return tensor
+
+    def embedMatrics(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        a = Transformer.__linear2tensor(self.srcEmbedMatrix)
+        b = Transformer.__linear2tensor(self.srcPostionEmbedding)
+        c = Transformer.__linear2tensor(self.dstEmbedMatrix)
+        d = Transformer.__linear2tensor(self.dstPostionEmbedding)
+        return a, b, c, d
     
-    def forward(self, batch_size: int, xseq_length: int, trgseq_length: int, src: torch.Tensor, trg: torch.Tensor) -> torch.Tensor:
+    def embedSrcAndTrg(self, batch_size: int, xseq_length: int, trgseq_length: int, src: torch.Tensor, trg: torch.Tensor, device: str = None) -> Tuple[torch.Tensor, torch.Tensor]:
         src_idx = torch.sparse_coo_tensor(src[0][0:2], src[0][2], [src.shape[2], self.sourceWordCount], dtype=torch.float)
         src_pos = torch.sparse_coo_tensor(src[1][0:2], src[1][2], [src.shape[2], self.sourceSentenceMaxLength], dtype=torch.float)
         trg_idx = torch.sparse_coo_tensor(trg[0][0:2], trg[0][2], [trg.shape[2], self.targetWordCount], dtype=torch.float)
         trg_pos = torch.sparse_coo_tensor(trg[1][0:2], trg[1][2], [trg.shape[2], self.targetSentenceMaxLength], dtype=torch.float)
 
-        src_idx = self.srcEmbedMatrix(src_idx.to(self.__device))
-        src_pos = self.srcPostionEmbedding(src_pos.to(self.__device))
+        if device is not None:
+            src_idx = src_idx.to(device)
+            src_pos = src_pos.to(device)
+            trg_idx = trg_idx.to(device)
+            trg_pos = trg_pos.to(device)
+
+        src_idx = self.srcEmbedMatrix(src_idx)
+        src_pos = self.srcPostionEmbedding(src_pos)
         src = src_idx + src_pos
         src = src.reshape(batch_size, xseq_length, src.shape[1])
-        trg_idx = self.dstEmbedMatrix(trg_idx.to(self.__device))
-        trg_pos = self.dstPostionEmbedding(trg_pos.to(self.__device))
+        trg_idx = self.dstEmbedMatrix(trg_idx)
+        trg_pos = self.dstPostionEmbedding(trg_pos)
         trg = trg_idx + trg_idx
         trg = trg.reshape(batch_size, trgseq_length, trg.shape[1])
+        return 0, 0, 0, src, trg
+    
+    def forward(self, batch_size: int, xseq_length: int, trgseq_length: int, src: torch.Tensor, trg: torch.Tensor) -> torch.Tensor:
+        if batch_size > 0:
+            _, _, _, src, trg = self.embedSrcAndTrg(batch_size, xseq_length, trgseq_length, src, trg, self.__device)
 
         srcEnc = self.encoder(src)
         out = self.decoder(trg, srcEnc)
         # return self.softmax(self.linearOut(out))
         return self.linearOut(out)
-

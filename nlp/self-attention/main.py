@@ -5,6 +5,8 @@ from dataset import CnEnDataset
 import pre_run
 from typing import List, Tuple, Generator, Iterator
 from pathlib import Path
+import csv
+import io
 import sys
 import time
 import math
@@ -16,7 +18,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 BATCH_SIZE = 150
-LEARNING_RATE = 0.08
+LEARNING_RATE = 0.04
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
 EMBEDDING_SIZE = 216
@@ -163,6 +165,20 @@ def __word_index_tensor(tensor: torch.Tensor) -> torch.Tensor:
             l2.append(tensor[i][j])
     return torch.tensor([l1, l2, val])
 
+def __save_tensor2csv(t: torch.Tensor, fn: str, header: List[str] = None):
+    with io.open(fn, "w", newline="") as sf:
+        writer = csv.writer(sf)
+        if header is not None:
+            writer.writerow(header)
+        writer.writerows(t.tolist())
+
+def save_embed_matrix(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, d: torch.Tensor):
+    __save_tensor2csv(a, "./running_data/src_embed")
+    __save_tensor2csv(b, "./running_data/src_position")
+    __save_tensor2csv(c, "./running_data/trg_embed")
+    __save_tensor2csv(d, "./running_data/trg_position")
+
+__global_running_transformer: Transformer = None
 def wrap_collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
     x0, trg0, _ = batch[0]
     batch_size = len(batch)
@@ -176,16 +192,26 @@ def wrap_collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
     xpos = __position_tensor(x)
     trgword = __word_index_tensor(trg)
     trgpos = __position_tensor(trg)
-    return batch_size, xseq_length, trgseq_length, torch.stack([xword, xpos], dim = 0), torch.stack([trgword, trgpos], dim = 0), y
-
+    args = [ batch_size, xseq_length, trgseq_length, torch.stack([xword, xpos], dim = 0), torch.stack([trgword, trgpos], dim = 0), y ]
+    if __global_running_transformer is None:
+        return args
+    else:
+        print("yes")
+        return __global_running_transformer.embedSrcAndTrg(*args)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
+    embed_grad = False
     dataset = CnEnDataset(EMBEDDING_SIZE, BATCH_SIZE)
     model = Transformer(dataset.en_tokens_count(), dataset.cn_tokens_count(), 
                         heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4,
-                        dropout = 0.12, layers = 6, device = device)
+                        dropout = 0.12, layers = 6, device = device, embed_grad = embed_grad)
     load_model(model)
+    if not embed_grad:
+        dataset.set_embed_matrics(*model.embedMatrics())
+    # swords = ["wait", "Wait", "go", "hello"]
+    # __save_tensor2csv(dataset.get_src_word_distances(swords), "./running_data/trg_word_distance.csv", swords)
+    # exit()
     if len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
@@ -193,6 +219,8 @@ if __name__ == '__main__':
         # scheduler = None
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.995 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
         print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
+        if not embed_grad:
+            __global_running_transformer = model
 
         while True:
             try:
