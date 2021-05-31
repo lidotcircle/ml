@@ -17,11 +17,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
 
-BATCH_SIZE = 150
-LEARNING_RATE = 0.04
+BATCH_SIZE = 300
+LEARNING_RATE = 0.08
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
-EMBEDDING_SIZE = 216
+EMBEDDING_SIZE = 100
 
 
 def weighted_avg_and_std(values, weights):
@@ -212,25 +212,25 @@ def wrap_collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
-    embed_grad = False
+    embed_grad = True
     dataset = CnEnDataset(EMBEDDING_SIZE, BATCH_SIZE)
     model = Transformer(dataset.en_tokens_count(), dataset.cn_tokens_count(), 
-                        heads = 8, embedding_size = EMBEDDING_SIZE, expansion = 4,
-                        dropout = 0.12, layers = 6, device = device, embed_grad = embed_grad)
+                        heads = 5, embedding_size = EMBEDDING_SIZE, expansion = 4,
+                        dropout = 0.05, layers = 6, device = device, embed_grad = embed_grad)
     load_model(model)
     if not embed_grad:
         dataset.set_embed_matrics(*model.embedMatrics())
-    swords = dataset.en_tokens[0:500]
-    __save_tensor2csv(dataset.get_src_word_distances(swords), "./running_data/src_word_distance.csv", swords, lambda v: v if v < 0.2 else "")
 
-    twords = dataset.cn_tokens[0:-1]
-    __save_tensor2csv(dataset.get_trg_word_distances(twords), "./running_data/trg_word_distance.csv", twords, lambda v: v if v < 0.2 else "")
+    if len(sys.argv) == 2 and sys.argv[1] == "-d":
+        swords = dataset.en_tokens[0:800]
+        __save_tensor2csv(dataset.get_src_word_distances(swords), "./running_data/src_word_distance.csv", swords, lambda v: v if v < 0.2 else "")
 
-    __save_tensor2csv(dataset.get_src_pos_distances(list(range(100))), "./running_data/src_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
-    __save_tensor2csv(dataset.get_trg_pos_distances(list(range(100))), "./running_data/trg_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
+        twords = dataset.cn_tokens[0:800]
+        __save_tensor2csv(dataset.get_trg_word_distances(twords), "./running_data/trg_word_distance.csv", twords, lambda v: v if v < 0.2 else "")
 
-    exit()
-    if len(sys.argv) == 1:
+        __save_tensor2csv(dataset.get_src_pos_distances(list(range(100))), "./running_data/src_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
+        __save_tensor2csv(dataset.get_trg_pos_distances(list(range(100))), "./running_data/trg_pos_distance.csv", list(range(100)), lambda v: v if True or v < 0.2 else "")
+    elif len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
         optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
