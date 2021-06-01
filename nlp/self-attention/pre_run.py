@@ -15,6 +15,9 @@ __cn_dataset = "./running_data/cmn-cn.txt"
 __en_tokens = "./running_data/en_tokens"
 __cn_tokens = "./running_data/cn_tokens"
 
+__en_length_info = "./running_data/en_length_info.csv"
+__cn_length_info = "./running_data/cn_length_info.csv"
+
 __en_csv_dataset = "./running_data/en_dataset.csv"
 __cn_csv_dataset = "./running_data/cn_dataset.csv"
 
@@ -26,11 +29,12 @@ BOS = 0
 EOS = 1
 
 # require download nltk punkt
-def __process_en(lines: List[str], ignoretrain: List[int]):
+def __process_en(lines: List[str], ignoretrain: List[int]) -> Dict:
     ignoretrain = set(ignoretrain)
     tokens = { }
     token_list = [ __BOS, __EOS ]
     csv_lines = []
+    length_info = {}
     for i in range(len(lines)):
         line = lines[i]
         csv_line = []
@@ -39,6 +43,10 @@ def __process_en(lines: List[str], ignoretrain: List[int]):
                 tokens[token] = len(token_list)
                 token_list.append(token)
             csv_line.append(tokens[token])
+        lk = len(csv_line)
+        if lk not in length_info:
+            length_info[lk] = 0
+        length_info[lk] = length_info[lk] + 1
         if i not in ignoretrain:
             csv_lines.append(csv_line)
 
@@ -50,12 +58,23 @@ def __process_en(lines: List[str], ignoretrain: List[int]):
         writer = csv.writer(csvfile)
         writer.writerows(csv_lines)
 
+    with io.open(__en_length_info, "w", newline='') as lenfile:
+        writer = csv.writer(lenfile)
+        lines = []
+        keys = list(length_info.keys())
+        keys.sort()
+        for k in keys:
+            lines.append([k, length_info[k]])
+        writer.writerows(lines)
+    return tokens
 
-def __process_cn(lines: List[str], ignoretrain: List[int]):
+
+def __process_cn(lines: List[str], ignoretrain: List[int]) -> Dict:
     ignoretrain = set(ignoretrain)
     tokens = { }
     token_list = [ __BOS, __EOS ]
     csv_lines = []
+    length_info = {}
     for i in range(len(lines)):
         line = lines[i]
         csv_line = []
@@ -66,6 +85,10 @@ def __process_cn(lines: List[str], ignoretrain: List[int]):
                 tokens[token] = len(token_list)
                 token_list.append(token)
             csv_line.append(tokens[token])
+        lk = len(csv_line)
+        if lk not in length_info:
+            length_info[lk] = 0
+        length_info[lk] = length_info[lk] + 1
         if i not in ignoretrain:
             csv_lines.append(csv_line)
 
@@ -77,8 +100,18 @@ def __process_cn(lines: List[str], ignoretrain: List[int]):
         writer = csv.writer(csvfile)
         writer.writerows(csv_lines)
 
+    with io.open(__cn_length_info, "w", newline='') as lenfile:
+        writer = csv.writer(lenfile)
+        lines = []
+        keys = list(length_info.keys())
+        keys.sort()
+        for k in keys:
+            lines.append([k, length_info[k]])
+        writer.writerows(lines)
+    return tokens
 
-def __generate_testcases(pairs: Iterator[Tuple[str, str]]):
+
+def __generate_testcases(pairs: Iterator[Tuple[str, str]], en_token_map: Dict, cn_token_map: Dict):
     cases = {}
     for src, trg in pairs:
         if src not in cases:
@@ -87,7 +120,21 @@ def __generate_testcases(pairs: Iterator[Tuple[str, str]]):
 
     nvnv = []
     for src in cases:
-        nvnv.append((src, cases[src]))
+        src_tokenv = list(nltk.word_tokenize(src))
+        src_tokens = list(map(lambda t: en_token_map[t], src_tokenv))
+        refs_tokenv = [ ]
+        refs_tokens = [ ]
+        for l in cases[src]:
+            ttv = []
+            tts = []
+            for t in l:
+                if t not in cn_token_map:
+                    continue
+                ttv.append(t)
+                tts.append(cn_token_map[t])
+            refs_tokenv.append(ttv)
+            refs_tokens.append(tts)
+        nvnv.append((src, src_tokenv, src_tokens, cases[src], refs_tokenv, refs_tokens))
 
     with io.open(__test_pairs, "w", encoding="utf-8") as testfile:
         encoder = json.encoder.JSONEncoder(indent=4, ensure_ascii=False)
@@ -109,10 +156,10 @@ def __process_data():
     for _ in range(math.floor(__test_perc * len(enlines))):
         d = random.randrange(len(vv))
         testidx.append(vv.pop(d))
-    __process_en(enlines, testidx)
-    __process_cn(cnlines, testidx)
+    en_token_map = __process_en(enlines, testidx)
+    cn_token_map = __process_cn(cnlines, testidx)
     testpairs = map(lambda idx: (enlines[idx], cnlines[idx]), testidx)
-    __generate_testcases(testpairs)
+    __generate_testcases(testpairs, en_token_map, cn_token_map)
 
 
 def load_dataset(start: int = 0, end: int = -1) -> Tuple[List[List[int]], List[List[int]]]:

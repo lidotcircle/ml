@@ -109,13 +109,6 @@ def save_model(model: nn.Module, postfix: str = ''):
     print("save model")
     torch.save(model.state_dict(), f"saved_model/model{postfix}.pth")
 
-def list_max_index(l: List[float]):
-    m = 0
-    for i in range(len(l)):
-        if l[i] > l[m]:
-            m = i
-    return m
-
 def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str, silent: bool = False) -> str:
     src = pre_run.en_tokenizer(src_sentence)
     src = dataset.embed_x(pre_run.en_tokenizer(src_sentence))
@@ -125,9 +118,8 @@ def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str, silent:
         trg = dataset.embed_trg(trg_list)
         batch_size, xseq_length, trgseq_length, x, trg, _ = wrap_collate_fn([(src, trg, torch.tensor([]))])
         pred = model(batch_size, xseq_length, trgseq_length, x, trg)
-        pred = torch.softmax(pred, dim = 2).squeeze(0).tolist()
-        pred = pred[-1]
-        y = list_max_index(pred)
+        pred = torch.softmax(pred, dim = 2)
+        y = torch.argmax(pred[0][-1])
         trg_list.append(y)
         if len(trg_list) > eng_len * 20:
             if not silent:
@@ -136,20 +128,92 @@ def translate(model: nn.Module, dataset: CnEnDataset, src_sentence: str, silent:
     trg_list.pop()
     return dataset.cn_idx_list2sentence(trg_list)
 
+len_limit = [ 1, 4, 8, 8, 10, 10, 12, 14, 16 ]
+len_limit = len_limit + [ 1.3 * (i + len(len_limit)) for i in range(len(len_limit), 1000) ]
+def __eval_multiple(model: nn.Module, sentences: List[List[int]], bos: int, eos: int, batch_size: int) -> List[List[int]]:
+    sentences_with_trg = [ (sentence, [ bos ]) for sentence in sentences ]
+    queue = set()
+    indecis = { }
+    finished_sentence = 0
+    def append_idx(i: int):
+        m, n = sentences_with_trg[i]
+        m, n = len(m), len(n)
+        if m not in indecis:
+            indecis[m] = {}
+        if n not in indecis[m]:
+            indecis[m][n] = []
+        indecis[m][n].append(i)
+        queue.add((m, n))
+
+    for i in range(len(sentences_with_trg)):
+        append_idx(i)
+
+    prev_perc = 0
+    while len(queue) > 0:
+        finished_perc = finished_sentence / len(sentences_with_trg) * 100
+        if (finished_perc - prev_perc) > 5:
+            print(f"finish {finished_perc:<2}%")
+            prev_perc = finished_perc
+
+        m, n = queue.pop()
+        li = indecis[m][n]
+        indecis[m][n] = li[batch_size:-1]
+        if len(li) > batch_size:
+            queue.add((m, n))
+        batchli = li[0:batch_size]
+        size = len(batchli)
+        src = torch.Tensor(2, 3, m * size)
+        trg = torch.Tensor(2, 3, n * size)
+        for i in range(size):
+            s, t = sentences_with_trg[batchli[i]]
+            for j in range(m):
+                src[0][0][i * m + j] = i * m + j
+                src[0][1][i * m + j] = s[j]
+                src[0][2][i * m + j] = 1
+                src[1][0][i * m + j] = i * m + j
+                src[1][1][i * m + j] = j
+                src[1][2][i * m + j] = 1
+            for j in range(len(t)):
+                trg[0][0][i * n + j] = i * n + j
+                trg[0][1][i * n + j] = t[j]
+                trg[0][2][i * n + j] = 1
+                trg[1][0][i * n + j] = i * n + j
+                trg[1][1][i * n + j] = j
+                trg[1][2][i * n + j] = 1
+        # ignore softmax
+        pred = model(size, m, n, src, trg)
+        try:
+            sss = torch.argmax(pred, dim=2)
+        except RuntimeError as e:
+            for idx in batchli:
+                _, s = sentences_with_trg[idx]
+                s.pop(0)
+                sentences_with_trg[idx] = ([], s)
+            print("catch a error: ", e)
+
+        for i in range(size):
+            s, o = sentences_with_trg[batchli[i]]
+            sentence = list(sss[i])
+            finish = sentence[-1] == eos
+            if finish:
+                finished_sentence = finished_sentence + 1
+                sentence.pop()
+            else:
+                sentence.insert(0, bos)
+                o.append(sentence[-1])
+            sentences_with_trg[batchli[i]] = (s, o)
+            if not finish and len(sentence) < len_limit[len(s)]:
+                append_idx(batchli[i])
+
+    return [ v for _, v in sentences_with_trg ]
+
 
 def eval_bleu(model: nn.Module, dataset: CnEnDataset, test_cases: List[Tuple[str, List[str]]]):
-    candidateslist = []
-    refslist = []
-    i = 0
-    for src, refs in test_cases:
-        i = i + 1
-        candidate = translate(model, dataset, src, True)
-        candidateslist.append(list(candidate))
-        refslist.append(list(map(lambda v: list(v), refs)))
-        if i % 10 == 0:
-            print(f"BLEU: evaluated {i} cases")
-            print(bleu_score(candidateslist, refslist))
-    score = bleu_score(candidateslist, refslist)
+    src_sentences = [ src for _, _, src, _, _, _ in test_cases ]
+    candidates = __eval_multiple(model, src_sentences, dataset.cn_bos(), dataset.cn_eos(), 300)
+    candidates = [ [ dataset.cn_tokens[v] for v in s ] for s in candidates ]
+    sentences_refs = [ refs for _, _, _, _, refs, _ in test_cases ]
+    score = bleu_score(candidates, sentences_refs)
     print(f"bleu score: {score}")
     return score
 
@@ -257,7 +321,7 @@ if __name__ == '__main__':
     elif len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)
-        optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE)
+        optimizer = torch.optim.SGD(model.parameters(), lr = LEARNING_RATE, momentum=0.02)
         # scheduler = None
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.995 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
         print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
