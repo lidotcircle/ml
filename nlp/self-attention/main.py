@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 BATCH_SIZE = 300
-LEARNING_RATE = 0.08
+LEARNING_RATE = 0.06
 TRAIN_EPCHO = 1000
 GONE_EPOCH = 0
 EMBEDDING_SIZE = 100
@@ -204,9 +204,10 @@ def __eval_multiple(model: nn.Module, sentences: List[List[int]], bos: int, eos:
             sentences_with_trg[batchli[i]] = (s, o)
             if not finish and len(sentence) < len_limit[len(s)]:
                 append_idx(batchli[i])
+            else:
+                o.pop(0)
 
     return [ v for _, v in sentences_with_trg ]
-
 
 def eval_bleu(model: nn.Module, dataset: CnEnDataset, test_cases: List[Tuple[str, List[str]]]):
     src_sentences = [ src for _, _, src, _, _, _ in test_cases ]
@@ -216,6 +217,20 @@ def eval_bleu(model: nn.Module, dataset: CnEnDataset, test_cases: List[Tuple[str
     score = bleu_score(candidates, sentences_refs)
     print(f"bleu score: {score}")
     return score
+
+
+def translate_multiple(model: nn.Module, sentences: List[str], bos: int, eos: int, batch_size: int) -> List[List[int]]:
+    _, cn_tokens = pre_run.load_tokens()
+    tokenized_sentence = [ pre_run.en_tokenizer(sentence) for sentence in sentences ]
+    ooo = __eval_multiple(model, tokenized_sentence, bos, eos, batch_size)
+    vvv = [ "".join([ cn_tokens[i] for i in l ]) for l in ooo ]
+    maxlen = 0
+    for s in sentences:
+        maxlen = max(maxlen, len(s))
+    for i in range(len(sentences)):
+        sentences[i] = sentences[i] + " " * (maxlen - len(sentences[i]))
+    for ss, rr in zip(sentences, vvv):
+        print(f"['{ss}' => '{rr}']")
 
 
 def position_tensor(sentenceLength: int, posLength: int) -> torch.Tensor:
@@ -300,7 +315,7 @@ if __name__ == '__main__':
     dataset = CnEnDataset(EMBEDDING_SIZE, BATCH_SIZE)
     model = Transformer(dataset.en_tokens_count(), dataset.cn_tokens_count(), 
                         heads = 5, embedding_size = EMBEDDING_SIZE, expansion = 4,
-                        dropout = 0.05, layers = 6, device = device, embed_grad = embed_grad)
+                        dropout = 0.12, layers = 6, device = device, embed_grad = embed_grad)
     load_model(model)
     if not embed_grad:
         dataset.set_embed_matrics(*model.embedMatrics())
@@ -318,6 +333,14 @@ if __name__ == '__main__':
         print("Evaluating BLEU Score")
         testcases = pre_run.load_testcases()
         eval_bleu(model, dataset, testcases)
+    elif len(sys.argv) > 1 and sys.argv[1] == "-t":
+        assert len(sys.argv) > 2
+        translate_multiple(model, sys.argv[2:], dataset.cn_bos(), dataset.cn_eos(), 300)
+    elif len(sys.argv) > 1 and sys.argv[1] == "-f":
+        assert len(sys.argv) > 2
+        with io.open(sys.argv[2], "r", encoding="utf-8") as sourcetext:
+            lines = sourcetext.read().split("\n")
+            translate_multiple(model, lines, dataset.cn_bos(), dataset.cn_eos(), 300)
     elif len(sys.argv) == 1:
         loss_fn = nn.CrossEntropyLoss()
         # optimizer = torch.optim.Adam(model.parameters(), lr = LEARNING_RATE)

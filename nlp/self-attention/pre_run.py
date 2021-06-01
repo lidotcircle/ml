@@ -185,11 +185,15 @@ def load_tokens() -> Tuple[List[str], List[str]]:
     return en_lines, cn_lines
 
 
+__en_map_cache = {}
 def __get_en_token_map():
+    if "value" in __en_map_cache:
+        return __en_map_cache["value"]
     __en_token_map = {}
     en_lines, _ = load_tokens()
     for i in range(len(en_lines)):
         __en_token_map[en_lines[i]] = i
+    __en_map_cache["value"] = __en_token_map
     return __en_token_map
 
 
