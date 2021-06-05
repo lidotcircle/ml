@@ -3,4 +3,6 @@
 **/model*.pth
 **/saved_model*
 **/running_data*
+**.log
+**.csv
 .vscode

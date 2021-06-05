@@ -1,8 +1,8 @@
+import numpy
 import torch
 import torch.nn as nn
-from typing import List, Tuple
-
-from torch.nn.modules import transformer
+from torch import Tensor
+from typing import Tuple, List
 
 
 class MultiHeadAttention(nn.Module):
@@ -19,7 +19,7 @@ class MultiHeadAttention(nn.Module):
         self.linearOut  = nn.Linear(self.embedding_size, self.embedding_size).to(device)
 
 
-    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    def forward(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         assert query.shape[0] == key.shape[0] == value.shape[0]
         batch_size = query.shape[0]
 
@@ -63,7 +63,7 @@ class EncoderBlock(nn.Module):
                 ).to(device)
         self.norm2 = nn.LayerNorm(self.embedding_size).to(device)
 
-    def forward(self, src: torch.Tensor) -> torch.Tensor:
+    def forward(self, src: Tensor) -> Tensor:
         v = self.selfAttention(src, src, src)
         v = self.dropout(self.norm1(src + v))
 
@@ -91,7 +91,7 @@ class DecoderBlock(nn.Module):
                 nn.Linear(expansion * self.embedding_size, self.embedding_size).to(device),
                 ).to(device)
 
-    def forward(self, target: torch.Tensor, encSrc: torch.Tensor) -> torch.Tensor:
+    def forward(self, target: Tensor, encSrc: Tensor) -> Tensor:
         # TODO mask
         v = self.selfAttention(target, target, target)
         v = self.dropout(self.norm1(target + v))
@@ -116,7 +116,7 @@ class Decoder(nn.Module):
                     device) for _ in range(0,layers)
                 ])
 
-    def forward(self, target: torch.Tensor, encSrc: torch.Tensor) -> torch.Tensor:
+    def forward(self, target: Tensor, encSrc: Tensor) -> Tensor:
         for layer in self.layers:
             target = layer(target, encSrc)
         return target
@@ -134,7 +134,7 @@ class Encoder(nn.Module):
                     device) for _ in range(0,layers)
                 ])
 
-    def forward(self, src: torch.Tensor) -> torch.Tensor:
+    def forward(self, src: Tensor) -> Tensor:
         for layer in self.layers:
             src = layer(src)
         return src
@@ -177,27 +177,27 @@ class Transformer(nn.Module):
         # self.softmax = nn.Softmax(dim = 2).to(device)
 
     @staticmethod
-    def __linear2tensor(linear: nn.Linear) -> torch.Tensor:
+    def __linear2tensor(linear: nn.Linear) -> Tensor:
         linear = linear.to("cpu")
-        tensor = torch.Tensor(linear.in_features, linear.out_features)
+        tensor = Tensor(linear.in_features, linear.out_features)
         for i in range(linear.in_features):
             idx = torch.sparse_coo_tensor([[i]], [1], [linear.in_features], dtype=torch.float)
             val = linear(idx)
             tensor[i] = val
         return tensor
 
-    def embedMatrics(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def embedMatrics(self) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         a = Transformer.__linear2tensor(self.srcEmbedMatrix)
         b = Transformer.__linear2tensor(self.srcPostionEmbedding)
         c = Transformer.__linear2tensor(self.dstEmbedMatrix)
         d = Transformer.__linear2tensor(self.dstPostionEmbedding)
         return a, b, c, d
     
-    def embedSrcAndTrg(self, batch_size: int, xseq_length: int, trgseq_length: int, src: torch.Tensor, trg: torch.Tensor, device: str = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        src_idx = torch.sparse_coo_tensor(src[0][0:2], src[0][2], [src.shape[2], self.sourceWordCount], dtype=torch.float)
-        src_pos = torch.sparse_coo_tensor(src[1][0:2], src[1][2], [src.shape[2], self.sourceSentenceMaxLength], dtype=torch.float)
-        trg_idx = torch.sparse_coo_tensor(trg[0][0:2], trg[0][2], [trg.shape[2], self.targetWordCount], dtype=torch.float)
-        trg_pos = torch.sparse_coo_tensor(trg[1][0:2], trg[1][2], [trg.shape[2], self.targetSentenceMaxLength], dtype=torch.float)
+    def embedSrcAndTrg(self, batch_size: int, src: Tensor, srcpos: Tensor, trg: Tensor, trgpos: Tensor, device: str = None) -> Tuple[Tensor, Tensor]:
+        src_idx = torch.sparse_coo_tensor(src[0:2],    src[2],    [src.shape[1], self.sourceWordCount], dtype=torch.float)
+        src_pos = torch.sparse_coo_tensor(srcpos[0:2], srcpos[2], [src.shape[1], self.sourceSentenceMaxLength], dtype=torch.float)
+        trg_idx = torch.sparse_coo_tensor(trg[0:2],    trg[2],    [trg.shape[1], self.targetWordCount], dtype=torch.float)
+        trg_pos = torch.sparse_coo_tensor(trgpos[0:2], trgpos[2], [trg.shape[1], self.targetSentenceMaxLength], dtype=torch.float)
 
         if device is not None:
             src_idx = src_idx.to(device)
@@ -208,18 +208,54 @@ class Transformer(nn.Module):
         src_idx = self.srcEmbedMatrix(src_idx)
         src_pos = self.srcPostionEmbedding(src_pos)
         src = src_idx + src_pos
+        assert src.shape[0] % batch_size == 0
+        xseq_length = src.shape[0] // batch_size
         src = src.reshape(batch_size, xseq_length, src.shape[1])
+
         trg_idx = self.dstEmbedMatrix(trg_idx)
         trg_pos = self.dstPostionEmbedding(trg_pos)
         trg = trg_idx + trg_idx
+        assert trg.shape[0] % batch_size == 0
+        trgseq_length = trg.shape[0] // batch_size
         trg = trg.reshape(batch_size, trgseq_length, trg.shape[1])
-        return 0, 0, 0, src, trg
+        return src, trg
     
-    def forward(self, batch_size: int, xseq_length: int, trgseq_length: int, src: torch.Tensor, trg: torch.Tensor) -> torch.Tensor:
+    def forward(self, batch_size: int, src: Tensor, srcpos: Tensor, trg: Tensor, trgpos: Tensor) -> Tensor:
         if batch_size > 0:
-            _, _, _, src, trg = self.embedSrcAndTrg(batch_size, xseq_length, trgseq_length, src, trg, self.__device)
+            src, trg = self.embedSrcAndTrg(batch_size, src, srcpos, trg, trgpos, self.__device)
 
         srcEnc = self.encoder(src)
         out = self.decoder(trg, srcEnc)
-        # return self.softmax(self.linearOut(out))
         return self.linearOut(out)
+
+
+def __position_tensor(shape0: int, shape1: int) -> Tensor:
+    l1 = []
+    l2 = []
+    val = [ 1 ] * shape0 * shape1
+    for _ in range(shape0):
+        for j in range(shape1):
+            l1.append(len(l1))
+            l2.append(j)
+    return torch.tensor([l1, l2, val])
+
+def __word_index_tensor(tensor: List[List[int]]) -> Tensor:
+    l1 = []
+    l2 = []
+    shape0 = len(tensor)
+    shape1 = len(tensor[0])
+    val = [ 1 ] * shape0 * shape1
+    for i in range(shape0):
+        for j in range(shape1):
+            l1.append(len(l1))
+            l2.append(tensor[i][j])
+    return torch.tensor([l1, l2, val])
+
+def generate_batch(x: List[List[int]], trg: List[List[int]], y: List[List[int]]) -> Tuple[int, Tensor, List[any]]:
+    assert len(x) == len(trg) == len(y)
+    batch_size = len(x)
+    xword = __word_index_tensor(x)
+    xpos  = __position_tensor(len(x), len(x[0]))
+    trgword = __word_index_tensor(trg)
+    trgpos  = __position_tensor(len(trg), len(trg[0]))
+    return batch_size, torch.tensor(y, dtype=torch.long), [batch_size, xword, xpos, trgword, trgpos]
