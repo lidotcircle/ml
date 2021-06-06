@@ -9,6 +9,7 @@ from torchtext.data.metrics import bleu_score
 from typing import List, Dict
 from pathlib import Path
 import signal
+import json
 import csv
 import io
 import os
@@ -40,6 +41,7 @@ class TranslationSession():
     def __init__(self, device: str = 'cpu'):
         self.gone_epoch = 0
         self.sample_count = 0
+        self.current_best_loss = -1
         self.workdir = os.path.dirname(__file__)
         self.dataset = UnpackedSentencePairDataset(os.path.join(self.workdir, "running_data"), 
                                             "source.txt", "target.txt", 
@@ -49,14 +51,23 @@ class TranslationSession():
         heads = 5
         embedding_size = EMBEDDING_SIZE
         expansion_rate = 4
-        self.__model_version = f"h{heads}-embedding{embedding_size}-expansion{expansion_rate}"
+        dropout = 0.05
+        layers = 6
+        self.__model_version = f"h{heads}-embedding{embedding_size}-expansion{expansion_rate}-dropout{dropout}-layers{layers}"
         self.model = Transformer(self.dataset.source_token_count(), self.dataset.target_token_count(), 
                             heads = heads, embedding_size = embedding_size, expansion = expansion_rate,
-                            dropout = 0.05, layers = 6, device = device, embed_grad = embed_grad).to(device)
+                            dropout = dropout, layers = layers, device = device, embed_grad = embed_grad).to(device)
         self.load_model()
+        self.__dumpme = Path(f"session{self.__model_version}.log")
+        if self.__dumpme.is_file():
+            with io.open(self.__dumpme, "r", encoding="utf-8") as dff:
+                obj = json.loads(dff.read())
+                self.gone_epoch = obj["gone_epoch"]
+                self.sample_count = obj["sample_count"]
+                self.current_best_loss = obj["current_best_loss"]
 
-        self.logger = CsvLogger(columns=["epoch", "batch size", "loss"], filename="lossinfo.csv")
-        self.bleu_logger = CsvLogger(columns=["epoch", "bleu"], filename="bleuinfo.csv")
+        self.logger = CsvLogger(columns=["epoch", "batch size", "loss"], filename=f"lossinfo{self.__model_version}.csv")
+        self.bleu_logger = CsvLogger(columns=["epoch", "bleu"], filename=f"bleuinfo{self.__model_version}.csv")
         self.len_limit = [ 1, 4, 8, 8, 10, 10, 12, 14, 16 ]
         self.len_limit = self.len_limit + [ 1.3 * (i + len(self.len_limit)) for i in range(len(self.len_limit), 1000) ]
 
@@ -76,7 +87,6 @@ class TranslationSession():
         loss_list = []
         loss_weight = []
         general_loss_list = []
-        current_best_loss = -1
         dataset_len = len(self.dataset)
         last_save = time.time()
         for current_batch_size, y, args in dataloader:
@@ -92,8 +102,6 @@ class TranslationSession():
 
             self.sample_count = self.sample_count + current_batch_size
             epoch_finished = self.sample_count % dataset_len == 0
-            if epoch_finished:
-                self.gone_epoch = self.gone_epoch + 1
             loss_list.append(float(loss))
             loss_weight.append(current_batch_size)
             self.logger.info(self.gone_epoch, current_batch_size, float(loss))
@@ -109,15 +117,16 @@ class TranslationSession():
                 general_loss_list.append(loss_mean)
                 print(f"device: {device}, epoch: {self.gone_epoch}, total sample: {self.sample_count}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
             if epoch_finished:
+                self.gone_epoch = self.gone_epoch + 1
                 loss_mean = numpy.mean(general_loss_list)
                 general_loss_list = []
                 print(f"loss mean: {loss_mean}")
-                if current_best_loss < 0:
-                    current_best_loss = loss_mean
-                if loss_mean < current_best_loss:
+                if self.current_best_loss < 0:
+                    self.current_best_loss = loss_mean
+                if loss_mean < self.current_best_loss:
                     print(f"save current best")
                     self.save_model(loss_mean)
-                    current_best_loss = loss_mean
+                    self.current_best_loss = loss_mean
                 if scheduler is not None:
                     scheduler.step()
         signal.signal(signal.SIGINT, origin_handler)
@@ -135,6 +144,12 @@ class TranslationSession():
         if not Path(fndir).is_dir():
             os.mkdir(fndir)
         torch.save(self.model.state_dict(), fn)
+        obj = {}
+        obj["sample_count"] = self.sample_count
+        obj["gone_epoch"]   = self.gone_epoch
+        obj["current_best_loss"]   = self.current_best_loss
+        with io.open(self.__dumpme, "w", encoding="utf-8") as ddf:
+            ddf.write(json.dumps(obj))
 
     def __eval_multiple(self, sentences: List[List[int]], batch_size: int, silent: bool = False) -> List[List[int]]:
         bos = self.dataset.bos()
@@ -224,7 +239,7 @@ class TranslationSession():
         src_sentences: List[List[int]] = [ pair["source_val"] for pair in test_cases ]
         candidates = self.__eval_multiple(src_sentences, 300, silent)
         candidates = [ [ self.dataset.target_value2token(v) for v in s ] for s in candidates ]
-        sentences_refs = [ pair["target_tokens"] for pair in test_cases ]
+        sentences_refs = [ pair["targets_tokens"] for pair in test_cases ]
         return bleu_score(candidates, sentences_refs)
 
     def train_and_bleu(self, epoch: int, interval: int):
@@ -234,7 +249,9 @@ class TranslationSession():
             rv = min(interval, epoch - gone)
             self.train(rv)
             gone = gone + rv
+            print("eval bleu")
             bleu = self.eval_bleu(None, True)
+            print(f"epoch: {gone}, bleu: {bleu}")
             self.bleu_logger.info(gone, bleu)
             if bleu > best_bleu:
                 self.save_model(f"bleu{bleu}")
@@ -286,7 +303,7 @@ if __name__ == '__main__':
 
         while True:
             try:
-                session.train_and_bleu(TRAIN_EPCHO, 5)
+                session.train_and_bleu(TRAIN_EPCHO, 1)
             except RuntimeError as e:
                 if 'out of meomory' in str(e):
                     print("|Warning: out of memory")

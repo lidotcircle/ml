@@ -57,6 +57,13 @@ def _load_numeric_csv(csv_file: str) -> List[List[int]]:
         reader = csv.reader(en_ds)
         return [[int(char) for char in line] for line in reader if len(line) > 0]
 
+class _ignore_blank_token():
+    def __init__(self, f: Callable[[str], List[str]]):
+        self.__f = f
+
+    def __call__(self, s: str) -> List[str]:
+        return list(filter(lambda v: v.strip() != '', self.__f(s)))
+
 
 class SentencePairDataset():
     def __init__(self, workdir: str, source_sentence_file: str, target_sentence_file: str,
@@ -75,8 +82,8 @@ class SentencePairDataset():
         self.__f_source_token_data = os.path.join(workdir, "token_" + Path(source_sentence_file).stem + ".txt")
         self.__f_target_token_data = os.path.join(workdir, "token_" + Path(target_sentence_file).stem + ".txt")
         self.__valid_perc = valid_perc
-        self.__source_tokenizer = source_tokenizer
-        self.__target_tokenizer = target_tokenizer
+        self.__source_tokenizer = _ignore_blank_token(source_tokenizer)
+        self.__target_tokenizer = _ignore_blank_token(target_tokenizer)
         self.__f_validation_data = os.path.join(workdir, "validation_pair" + Path(source_sentence_file).stem + ".txt")
         self.__validationv = None
         self.__data_valid = False
@@ -104,20 +111,27 @@ class SentencePairDataset():
         self.__data_valid = True
         self.__load_token()
         validation_list = []
+        tvtv = {}
         for i in testidx:
             sline = slines[i]
             tline = tlines[i]
-            sline_tokens = self.__source_tokenizer(sline)
-            tline_tokens = self.__target_tokenizer(tline)
+            if sline not in tvtv:
+                tvtv[sline] = []
+            tvtv[sline].append(tline)
+
+        for source_line in tvtv.keys():
+            sline_tokens = self.__source_tokenizer(source_line)
             sline_val    = [ self.source_token2value(t) for t in sline_tokens ]
-            tline_val    = [ self.target_token2value(t) for t in tline_tokens ]
+            target_lines = tvtv[source_line]
+            target_lines_tokens = [ self.__target_tokenizer(tline) for tline in target_lines ]
+            target_lines_val    = [ [ self.target_token2value(t) for t in line ] for line in target_lines_tokens]
             validation_list.append({
                 "source": sline, 
-                "target": tline,
                 "source_tokens": sline_tokens,
-                "target_tokens": tline_tokens,
                 "source_val": sline_val,
-                "target_val": tline_val,
+                "targets": target_lines,
+                "targets_tokens": target_lines_tokens,
+                "targets_val": target_lines_val
                 })
         with io.open(self.__f_validation_data, "w", encoding="utf-8") as vfile:
             vfile.write(json.dumps(validation_list))
@@ -125,8 +139,12 @@ class SentencePairDataset():
     def validation_stuff(self) -> Dict:
         if self.__validationv != None:
             return self.__validationv
+        
+        fn = Path(self.__f_validation_data)
+        if fn.is_file():
+            self.__generate_data()
 
-        with io.open(self.__f_validation_data, "r", encoding="utf-8") as vfile:
+        with io.open(fn, "r", encoding="utf-8") as vfile:
             self.__validationv = json.loads(vfile.read())
             return self.__validationv
 

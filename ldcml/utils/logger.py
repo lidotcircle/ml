@@ -1,7 +1,9 @@
 import logging
 import csv
 import io
+from os import write
 from typing import List
+from pathlib import Path
 
 
 class CsvFormatter(logging.Formatter):
@@ -20,12 +22,14 @@ class CsvFormatter(logging.Formatter):
 
 class CsvLogger():
     def __init__(self, columns: List[str], filename: str):
+        write_column = not Path(filename).is_file()
         self.__logger = logging.Logger(filename)
         self.__logger.setLevel(logging.INFO)
         handler = logging.FileHandler(filename=filename, mode="a", encoding="utf-8")
         handler.setFormatter(CsvFormatter())
         self.__logger.addHandler(handler)
-        self.__logger.info(*columns)
+        if write_column:
+            self.__logger.info(*columns)
 
     def info(self, *args):
         self.__logger.info(*args)
