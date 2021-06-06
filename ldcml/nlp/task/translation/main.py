@@ -46,12 +46,17 @@ class TranslationSession():
                                             nltk.word_tokenize, cn_tokenizer)
 
         embed_grad = True
+        heads = 5
+        embedding_size = EMBEDDING_SIZE
+        expansion_rate = 4
+        self.__model_version = f"h{heads}-embedding{embedding_size}-expansion{expansion_rate}"
         self.model = Transformer(self.dataset.source_token_count(), self.dataset.target_token_count(), 
-                            heads = 5, embedding_size = EMBEDDING_SIZE, expansion = 4,
+                            heads = heads, embedding_size = embedding_size, expansion = expansion_rate,
                             dropout = 0.05, layers = 6, device = device, embed_grad = embed_grad).to(device)
         self.load_model()
 
         self.logger = CsvLogger(columns=["epoch", "batch size", "loss"], filename="lossinfo.csv")
+        self.bleu_logger = CsvLogger(columns=["epoch", "bleu"], filename="bleuinfo.csv")
         self.len_limit = [ 1, 4, 8, 8, 10, 10, 12, 14, 16 ]
         self.len_limit = self.len_limit + [ 1.3 * (i + len(self.len_limit)) for i in range(len(self.len_limit), 1000) ]
 
@@ -73,7 +78,6 @@ class TranslationSession():
         general_loss_list = []
         current_best_loss = -1
         dataset_len = len(self.dataset)
-        i = 0
         last_save = time.time()
         for current_batch_size, y, args in dataloader:
             pred = self.model(*args)
@@ -86,7 +90,6 @@ class TranslationSession():
             loss.backward()
             optimizer.step()
 
-            i = i + 1
             self.sample_count = self.sample_count + current_batch_size
             epoch_finished = self.sample_count % dataset_len == 0
             if epoch_finished:
@@ -107,6 +110,7 @@ class TranslationSession():
                 print(f"device: {device}, epoch: {self.gone_epoch}, total sample: {self.sample_count}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
             if epoch_finished:
                 loss_mean = numpy.mean(general_loss_list)
+                general_loss_list = []
                 print(f"loss mean: {loss_mean}")
                 if current_best_loss < 0:
                     current_best_loss = loss_mean
@@ -114,20 +118,19 @@ class TranslationSession():
                     print(f"save current best")
                     self.save_model(loss_mean)
                     current_best_loss = loss_mean
-                general_loss_list = []
                 if scheduler is not None:
                     scheduler.step()
         signal.signal(signal.SIGINT, origin_handler)
 
     def load_model(self):
-        file = Path(os.path.join(self.workdir, "saved_model", "model.pth"))
+        file = Path(os.path.join(self.workdir, "saved_model", f"model{self.__model_version}.pth"))
         if file.is_file():
             print("load model")
             self.model.load_state_dict(torch.load(file))
 
     def save_model(self, postfix: str = ''):
         print("save model")
-        fn = os.path.join(self.workdir, "saved_model", f"model{postfix}.pth")
+        fn = os.path.join(self.workdir, "saved_model", f"model{self.__model_version}{postfix}.pth")
         fndir = os.path.dirname(fn)
         if not Path(fndir).is_dir():
             os.mkdir(fndir)
@@ -224,6 +227,19 @@ class TranslationSession():
         sentences_refs = [ pair["target_tokens"] for pair in test_cases ]
         return bleu_score(candidates, sentences_refs)
 
+    def train_and_bleu(self, epoch: int, interval: int):
+        gone = 0
+        best_bleu = 0
+        while gone < epoch:
+            rv = min(interval, epoch - gone)
+            self.train(rv)
+            gone = gone + rv
+            bleu = self.eval_bleu(None, True)
+            self.bleu_logger.info(gone, bleu)
+            if bleu > best_bleu:
+                self.save_model(f"bleu{bleu}")
+                best_bleu = bleu
+
     def translate(self, sentences: List[str], joinv: str = '') -> List[str]:
         tokenized_sentence = [ self.dataset.source_sentence2val(sentence) for sentence in sentences ]
         ooo = self.__eval_multiple(tokenized_sentence, 300, True)
@@ -270,7 +286,7 @@ if __name__ == '__main__':
 
         while True:
             try:
-                session.train(1)
+                session.train_and_bleu(TRAIN_EPCHO, 5)
             except RuntimeError as e:
                 if 'out of meomory' in str(e):
                     print("|Warning: out of memory")
