@@ -1,25 +1,51 @@
-import numpy
 import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple, List
 
 
+__tri_mask_store = {}
+def get_mask_tensor(row: int, col: int, device: str) -> Tensor:
+    key = f"{row}-{col}-{device}"
+    if key in __tri_mask_store:
+        return __tri_mask_store[key]
+    ans = torch.triu(torch.full((row, col), True)) == False
+    ans = ans.to(device)
+    __tri_mask_store[key] = ans
+    return ans
+
+
 class MultiHeadAttention(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, device: str):
+    def __init__(self, heads: int, embedding_size: int):
+        """ multi-head attention
+
+        Parameters
+        ---------
+        heads: int
+            how many heads
+        embedding_size: int
+            vector dimension
+        """
         super(MultiHeadAttention, self).__init__()
         self.heads = heads
         self.embedding_size = embedding_size
         self.head_size = self.embedding_size // self.heads
         assert embedding_size % heads == 0
+        self.__sqrt_embedding_size = (embedding_size / heads) ** 0.5
 
-        self.queryTrans = nn.Linear(self.embedding_size, self.embedding_size).to(device)
-        self.keyTrans   = nn.Linear(self.embedding_size, self.embedding_size).to(device)
-        self.valueTrans = nn.Linear(self.embedding_size, self.embedding_size).to(device)
-        self.linearOut  = nn.Linear(self.embedding_size, self.embedding_size).to(device)
+        self.queryTrans = nn.Linear(self.embedding_size, self.embedding_size)
+        self.keyTrans   = nn.Linear(self.embedding_size, self.embedding_size)
+        self.valueTrans = nn.Linear(self.embedding_size, self.embedding_size)
+        self.linearOut  = nn.Linear(self.embedding_size, self.embedding_size)
 
-
-    def forward(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, masked = None) -> Tensor:
+        """
+        Parameters
+        ----------
+        masked: Tensor
+            mask attention, for example used to prevent nth query 
+            from attenting to no-first-n key-value pair
+        """
         assert query.shape[0] == key.shape[0] == value.shape[0]
         batch_size = query.shape[0]
 
@@ -34,34 +60,36 @@ class MultiHeadAttention(nn.Module):
 
         # Reshape to multi heads
         query = query.reshape(batch_size, query_len, self.heads, self.head_size)
-        key   = key.reshape  (batch_size, key_len,   self.heads, self.head_size)
+        key   = key  .reshape(batch_size, key_len,   self.heads, self.head_size)
         value = value.reshape(batch_size, value_len, self.heads, self.head_size)
 
         # (QK^T / sqrt(d_k))V
-        coff = torch.einsum('bqhl,bkhl->bqhk', [query, key])
-        d_k = key.shape[3]
-        attention = torch.softmax(coff / (d_k ** (1/2)), dim = 3)
+        coff: Tensor = torch.einsum('bqhl,bkhl->bhqk', [query, key])
+        if masked is not None:
+            coff.masked_fill_(masked, -1e9)
+        attention = torch.softmax(torch.div(coff, self.__sqrt_embedding_size), dim = 3)
 
-        ans = torch.einsum('bqhk,bkhl->bqhl', [attention, value]).reshape(batch_size, query_len, self.embedding_size)
+        ans = torch.einsum('bhqk,bkhl->bqhl', [attention, value])
+        ans = ans.reshape(batch_size, query_len, self.embedding_size)
         ans = self.linearOut(ans)
         return ans
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, device: str):
+    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float):
         super(EncoderBlock, self).__init__()
         self.heads = heads
         self.embedding_size = embedding_size
 
-        self.dropout = nn.Dropout(dropout).to(device)
-        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size, device)
-        self.norm1 = nn.LayerNorm(self.embedding_size).to(device)
+        self.dropout = nn.Dropout(dropout)
+        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size)
+        self.norm1 = nn.LayerNorm(self.embedding_size)
         self.fcff = nn.Sequential(
-                nn.Linear(self.embedding_size, expansion * self.embedding_size).to(device),
-                nn.ReLU().to(device),
-                nn.Linear(expansion * self.embedding_size, self.embedding_size).to(device)
-                ).to(device)
-        self.norm2 = nn.LayerNorm(self.embedding_size).to(device)
+                nn.Linear(self.embedding_size, expansion * self.embedding_size),
+                nn.ReLU(),
+                nn.Linear(expansion * self.embedding_size, self.embedding_size)
+                )
+        self.norm2 = nn.LayerNorm(self.embedding_size)
 
     def forward(self, src: Tensor) -> Tensor:
         v = self.selfAttention(src, src, src)
@@ -73,27 +101,29 @@ class EncoderBlock(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, device: str):
+    def __init__(self, heads: int, embedding_size: int, 
+                 expansion: int, dropout: float, device: str):
         super(DecoderBlock, self).__init__()
         self.heads = heads
         self.embedding_size = embedding_size
+        self.__device = device
 
-        self.dropout = nn.Dropout(dropout).to(device)
-        self.norm1 = nn.LayerNorm(self.embedding_size).to(device)
-        self.norm2 = nn.LayerNorm(self.embedding_size).to(device)
-        self.norm3 = nn.LayerNorm(self.embedding_size).to(device)
-        self.attention = MultiHeadAttention(self.heads, self.embedding_size, device)
-        # TODO mask ??
-        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size, device)
+        self.dropout = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(self.embedding_size)
+        self.norm2 = nn.LayerNorm(self.embedding_size)
+        self.norm3 = nn.LayerNorm(self.embedding_size)
+        self.attention = MultiHeadAttention(self.heads, self.embedding_size)
+        self.selfAttention = MultiHeadAttention(self.heads, self.embedding_size)
         self.fcff = nn.Sequential(
-                nn.Linear(self.embedding_size, expansion * self.embedding_size).to(device),
-                nn.ReLU().to(device),
-                nn.Linear(expansion * self.embedding_size, self.embedding_size).to(device),
-                ).to(device)
+                nn.Linear(self.embedding_size, expansion * self.embedding_size),
+                nn.ReLU(),
+                nn.Linear(expansion * self.embedding_size, self.embedding_size),
+                )
 
     def forward(self, target: Tensor, encSrc: Tensor) -> Tensor:
-        # TODO mask
-        v = self.selfAttention(target, target, target)
+        row = col = target.shape[1]
+        masked = get_mask_tensor(row, col, self.__device)
+        v = self.selfAttention(target, target, target, masked)
         v = self.dropout(self.norm1(target + v))
 
         b = self.attention(target, encSrc, encSrc)
@@ -105,7 +135,8 @@ class DecoderBlock(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int, device: str):
+    def __init__(self, heads: int, embedding_size: int,
+                 expansion: int, dropout: float, layers: int, device: str):
         super(Decoder, self).__init__()
         self.layers = nn.ModuleList([
                 DecoderBlock(
@@ -123,15 +154,15 @@ class Decoder(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, heads: int, embedding_size: int, expansion: int, dropout: float, layers: int, device: str):
+    def __init__(self, heads: int, embedding_size: int,
+                 expansion: int, dropout: float, layers: int):
         super(Encoder, self).__init__()
         self.layers = nn.ModuleList([
                 EncoderBlock(
                     heads, 
                     embedding_size, 
                     expansion, 
-                    dropout,
-                    device) for _ in range(0,layers)
+                    dropout) for _ in range(0,layers)
                 ])
 
     def forward(self, src: Tensor) -> Tensor:
@@ -156,10 +187,10 @@ class Transformer(nn.Module):
             ):
         super(Transformer, self).__init__()
         assert targetWordCount > 0
-        self.srcEmbedMatrix = nn.Linear(sourceWordCount, embedding_size).to(device)
-        self.dstEmbedMatrix = nn.Linear(targetWordCount, embedding_size).to(device)
-        self.srcPostionEmbedding = nn.Linear(sourceSentenceMaxLength, embedding_size).to(device)
-        self.dstPostionEmbedding = nn.Linear(targetSentenceMaxLength, embedding_size).to(device)
+        self.srcEmbedMatrix = nn.Linear(sourceWordCount, embedding_size)
+        self.dstEmbedMatrix = nn.Linear(targetWordCount, embedding_size)
+        self.srcPostionEmbedding = nn.Linear(sourceSentenceMaxLength, embedding_size)
+        self.dstPostionEmbedding = nn.Linear(targetSentenceMaxLength, embedding_size)
         self.srcEmbedMatrix.requires_grad_(embed_grad)
         self.dstEmbedMatrix.requires_grad_(embed_grad)
         self.srcPostionEmbedding.requires_grad_(embed_grad)
@@ -171,10 +202,10 @@ class Transformer(nn.Module):
         self.targetSentenceMaxLength = targetSentenceMaxLength
         self.__device = device
 
-        self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers, device)
+        self.encoder = Encoder(heads, embedding_size, expansion, dropout, layers)
         self.decoder = Decoder(heads, embedding_size, expansion, dropout, layers, device)
-        self.linearOut = nn.Linear(embedding_size, targetWordCount).to(device)
-        # self.softmax = nn.Softmax(dim = 2).to(device)
+        self.linearOut = nn.Linear(embedding_size, targetWordCount)
+        # self.softmax = nn.Softmax(dim = 2)
 
     @staticmethod
     def __linear2tensor(linear: nn.Linear) -> Tensor:
@@ -193,17 +224,16 @@ class Transformer(nn.Module):
         d = Transformer.__linear2tensor(self.dstPostionEmbedding)
         return a, b, c, d
     
-    def embedSrcAndTrg(self, batch_size: int, src: Tensor, srcpos: Tensor, trg: Tensor, trgpos: Tensor, device: str = None) -> Tuple[Tensor, Tensor]:
+    def embedSrcAndTrg(self, batch_size: int, src: Tensor, srcpos: Tensor, trg: Tensor, trgpos: Tensor) -> Tuple[Tensor, Tensor]:
         src_idx = torch.sparse_coo_tensor(src[0:2],    src[2],    [src.shape[1], self.sourceWordCount], dtype=torch.float)
         src_pos = torch.sparse_coo_tensor(srcpos[0:2], srcpos[2], [src.shape[1], self.sourceSentenceMaxLength], dtype=torch.float)
         trg_idx = torch.sparse_coo_tensor(trg[0:2],    trg[2],    [trg.shape[1], self.targetWordCount], dtype=torch.float)
         trg_pos = torch.sparse_coo_tensor(trgpos[0:2], trgpos[2], [trg.shape[1], self.targetSentenceMaxLength], dtype=torch.float)
 
-        if device is not None:
-            src_idx = src_idx.to(device)
-            src_pos = src_pos.to(device)
-            trg_idx = trg_idx.to(device)
-            trg_pos = trg_pos.to(device)
+        src_idx = src_idx.to(self.__device)
+        src_pos = src_pos.to(self.__device)
+        trg_idx = trg_idx.to(self.__device)
+        trg_pos = trg_pos.to(self.__device)
 
         src_idx = self.srcEmbedMatrix(src_idx)
         src_pos = self.srcPostionEmbedding(src_pos)
@@ -222,7 +252,7 @@ class Transformer(nn.Module):
     
     def forward(self, batch_size: int, src: Tensor, srcpos: Tensor, trg: Tensor, trgpos: Tensor) -> Tensor:
         if batch_size > 0:
-            src, trg = self.embedSrcAndTrg(batch_size, src, srcpos, trg, trgpos, self.__device)
+            src, trg = self.embedSrcAndTrg(batch_size, src, srcpos, trg, trgpos)
 
         srcEnc = self.encoder(src)
         out = self.decoder(trg, srcEnc)

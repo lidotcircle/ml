@@ -6,8 +6,9 @@ from ....dataset.nlp import UnpackedSentencePairDataset
 from ....utils.logger import CsvLogger
 
 from torchtext.data.metrics import bleu_score
-from typing import List, Dict, Tuple, Iterator
+from typing import List, Dict
 from pathlib import Path
+import signal
 import csv
 import io
 import os
@@ -36,7 +37,7 @@ def collate_fn_wrap(batch):
     return generate_batch(*zip(*batch))
 
 class TranslationSession():
-    def __init__(self):
+    def __init__(self, device: str = 'cpu'):
         self.gone_epoch = 0
         self.sample_count = 0
         self.workdir = os.path.dirname(__file__)
@@ -47,7 +48,7 @@ class TranslationSession():
         embed_grad = True
         self.model = Transformer(self.dataset.source_token_count(), self.dataset.target_token_count(), 
                             heads = 5, embedding_size = EMBEDDING_SIZE, expansion = 4,
-                            dropout = 0.05, layers = 6, device = device, embed_grad = embed_grad)
+                            dropout = 0.05, layers = 6, device = device, embed_grad = embed_grad).to(device)
         self.load_model()
 
         self.logger = CsvLogger(columns=["epoch", "batch size", "loss"], filename="lossinfo.csv")
@@ -55,6 +56,11 @@ class TranslationSession():
         self.len_limit = self.len_limit + [ 1.3 * (i + len(self.len_limit)) for i in range(len(self.len_limit), 1000) ]
 
     def train(self, epoch: int):
+        def signal_int_handler(signo, stkf):
+            self.save_model()
+            exit(0)
+        origin_handler = signal.signal(signal.SIGINT, signal_int_handler)
+
         loss_fn   = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(self.model.parameters(), lr = LEARNING_RATE, momentum=0.02)
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.995 ** (epoch + GONE_EPOCH) * LEARNING_RATE)
@@ -98,8 +104,7 @@ class TranslationSession():
                 loss_list = []
                 loss_weight = []
                 general_loss_list.append(loss_mean)
-                print(f"device: {device}, epoch: {self.gone_epoch}, batch size: {BATCH_SIZE}, batch: {i}, total sample: {self.sample_count}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
-                self.sample_count = 0
+                print(f"device: {device}, epoch: {self.gone_epoch}, total sample: {self.sample_count}, loss mean: {loss_mean:>7f}, loss_std: {loss_std:>7f}")
             if epoch_finished:
                 loss_mean = numpy.mean(general_loss_list)
                 print(f"loss mean: {loss_mean}")
@@ -112,16 +117,21 @@ class TranslationSession():
                 general_loss_list = []
                 if scheduler is not None:
                     scheduler.step()
+        signal.signal(signal.SIGINT, origin_handler)
 
     def load_model(self):
-        file = Path(os.path.join(self.workdir, "saved_model/model.pth"))
+        file = Path(os.path.join(self.workdir, "saved_model", "model.pth"))
         if file.is_file():
             print("load model")
             self.model.load_state_dict(torch.load(file))
 
     def save_model(self, postfix: str = ''):
         print("save model")
-        torch.save(self.model.state_dict(), os.path.join(self.workdir, f"saved_model/model{postfix}.pth"))
+        fn = os.path.join(self.workdir, "saved_model", f"model{postfix}.pth")
+        fndir = os.path.dirname(fn)
+        if not Path(fndir).is_dir():
+            os.mkdir(fndir)
+        torch.save(self.model.state_dict(), fn)
 
     def __eval_multiple(self, sentences: List[List[int]], batch_size: int, silent: bool = False) -> List[List[int]]:
         bos = self.dataset.bos()
@@ -253,7 +263,7 @@ def __save_tensor2csv(t: torch.Tensor, fn: str, header: List[str] = None, vmap =
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
-    session = TranslationSession()
+    session = TranslationSession(device)
 
     if len(sys.argv) == 1:
         print(f"learning rate: {LEARNING_RATE}, embedding size: {EMBEDDING_SIZE}, batch size: {BATCH_SIZE}")
