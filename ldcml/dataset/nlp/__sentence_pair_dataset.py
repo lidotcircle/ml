@@ -6,6 +6,7 @@ import io
 import os
 from pathlib import Path
 import pathlib
+import time
 import base64
 import json
 import csv
@@ -72,6 +73,7 @@ class SentencePairDataset():
         if not pathlib.Path(workdir).is_dir():
             os.mkdir(workdir)
 
+        self.__workdir = workdir
         self.__data_is_loaded = False
         self.__source_sentence_file = source_sentence_file if os.path.isabs(source_sentence_file) \
             else os.path.join(workdir, source_sentence_file)
@@ -97,6 +99,12 @@ class SentencePairDataset():
         assert len(slines) == len(tlines)
 
         vv = list(range(len(slines)))
+        sd = Path(os.path.join(self.__workdir, "seed.txt"))
+        if not sd.is_file():
+            with io.open(sd, "w", encoding="utf-8") as sdf:
+                sdf.write(f"{math.floor(time.time())}")
+        with io.open(sd, "r", encoding="utf-8") as sdf:
+            random.seed(int(sdf.read()))
         testidx = []
         for _ in range(math.floor(self.__valid_perc * len(slines))):
             d = random.randrange(len(vv))
@@ -126,7 +134,7 @@ class SentencePairDataset():
             target_lines_tokens = [ self.__target_tokenizer(tline) for tline in target_lines ]
             target_lines_val    = [ [ self.target_token2value(t) for t in line ] for line in target_lines_tokens]
             validation_list.append({
-                "source": sline, 
+                "source": source_line, 
                 "source_tokens": sline_tokens,
                 "source_val": sline_val,
                 "targets": target_lines,
@@ -134,7 +142,7 @@ class SentencePairDataset():
                 "targets_val": target_lines_val
                 })
         with io.open(self.__f_validation_data, "w", encoding="utf-8") as vfile:
-            vfile.write(json.dumps(validation_list))
+            vfile.write(json.dumps(validation_list, indent=2))
 
     def validation_stuff(self) -> Dict:
         if self.__validationv != None:

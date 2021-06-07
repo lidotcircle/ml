@@ -89,6 +89,7 @@ class TranslationSession():
         general_loss_list = []
         dataset_len = len(self.dataset)
         last_save = time.time()
+        this_sample_count = 0
         for current_batch_size, y, args in dataloader:
             pred = self.model(*args)
             pred = pred.reshape(pred.shape[0] * pred.shape[1], pred.shape[2])
@@ -101,7 +102,8 @@ class TranslationSession():
             optimizer.step()
 
             self.sample_count = self.sample_count + current_batch_size
-            epoch_finished = self.sample_count % dataset_len == 0
+            this_sample_count += current_batch_size
+            epoch_finished = this_sample_count % dataset_len == 0
             loss_list.append(float(loss))
             loss_weight.append(current_batch_size)
             self.logger.info(self.gone_epoch, current_batch_size, float(loss))
@@ -251,8 +253,8 @@ class TranslationSession():
             gone = gone + rv
             print("eval bleu")
             bleu = self.eval_bleu(None, True)
-            print(f"epoch: {gone}, bleu: {bleu}")
-            self.bleu_logger.info(gone, bleu)
+            print(f"epoch: {self.gone_epoch}, bleu: {bleu}")
+            self.bleu_logger.info(self.gone_epoch, bleu)
             if bleu > best_bleu:
                 self.save_model(f"bleu{bleu}")
                 best_bleu = bleu
@@ -303,7 +305,7 @@ if __name__ == '__main__':
 
         while True:
             try:
-                session.train_and_bleu(TRAIN_EPCHO, 1)
+                session.train_and_bleu(TRAIN_EPCHO, 10)
             except RuntimeError as e:
                 if 'out of meomory' in str(e):
                     print("|Warning: out of memory")
